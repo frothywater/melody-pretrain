@@ -7,11 +7,11 @@ from copy import deepcopy
 from glob import glob
 from multiprocessing import Pool
 
+import numpy as np
 from miditoolkit import Instrument, Marker, MidiFile, Note
 from tqdm import tqdm
 
 ticks_per_bar = 1920
-midi_dir = "/mnt/nextlab/huangzhijie/midi-preprocess/data/processed/13_dataset_held50/wikifonia_melody_pcset"
 
 
 def transpose_pitches(pitches: tuple):
@@ -194,7 +194,7 @@ def group_ngram_dict(ngram_dict: dict):
 
 def extract_pitch_class_ngrams_job(midi_file: str, ngram_range: range):
     """Extract pitch class ngrams from a midi file.
-    Return a dict of ngram -> score."""
+    Return a list of (ngram tuple, note index)."""
     midi = MidiFile(midi_file)
     assert len(midi.instruments) == 1, "Only support single-track midi files."
     pitch_classes = [note.pitch % 12 for note in midi.instruments[0].notes]
@@ -210,7 +210,7 @@ def extract_pitch_class_ngrams_job(midi_file: str, ngram_range: range):
 
 def extract_onset_ngrams_job(midi_file: str, ngram_range: range):
     """Extract onset ngrams from a midi file.
-    Return a dict of ngram -> score."""
+    Return a list of (ngram tuple, note index)."""
     midi = MidiFile(midi_file)
     assert len(midi.instruments) == 1, "Only support single-track midi files."
     midi = quantize_midi(midi)
@@ -272,18 +272,21 @@ def extract_ngrams(midi_dir: str, ngram_range: range, kind: str):
     return ngram_dict, ngram_str_dict
 
 
-def extract(midi_dir: str, ngram_range: range):
+def extract(midi_dir: str, data_dir: str, ngram_range: range):
+    os.makedirs(data_dir, exist_ok=True)
     for kind in ["pitch", "rhythm"]:
         ngram_dict, ngram_str_dict = extract_ngrams(midi_dir, ngram_range, kind=kind)
-        print("saving...")
-        with open(f"data/ngram_{kind}.pkl", "wb") as f:
+        pkl_path = os.path.join(data_dir, f"ngram_{kind}.pkl")
+        print(f"saving to {pkl_path}...")
+        with open(pkl_path, "wb") as f:
             pickle.dump(ngram_dict, f)
-        with open(f"data/ngram_{kind}.json", "w") as f:
+        json_path = os.path.join(data_dir, f"ngram_{kind}.json")
+        with open(json_path, "w") as f:
             json.dump(ngram_str_dict, f, indent=2)
 
 
-def render_midi():
-    def render_pitch_ngrams(grouped_ngram_dict: dict, dest_dir: str, note_length: int = ticks_per_bar // 8):
+def render_midi(data_dir: str, dest_dir: str):
+    def render_pitch_ngrams(grouped_ngram_dict: dict, note_length: int = ticks_per_bar // 8):
 
         print(f"rendering pitch ngrams {dest_dir}...")
         os.makedirs(dest_dir, exist_ok=True)
@@ -305,9 +308,9 @@ def render_midi():
                     )
                     instrument.notes.append(note)
             midi.instruments.append(instrument)
-            midi.dump(os.path.join(dest_dir, f"{n}-gram.mid"))
+            midi.dump(os.path.join(dest_dir, f"pitch-{n}-gram.mid"))
 
-    def render_rhythm_ngrams(grouped_ngram_dict: dict, dest_dir: str, note_pitch: int = 65):
+    def render_rhythm_ngrams(grouped_ngram_dict: dict, note_pitch: int = 65):
         print(f"rendering rhythm ngrams {dest_dir}...")
         os.makedirs(dest_dir, exist_ok=True)
         for n in grouped_ngram_dict:
@@ -327,10 +330,11 @@ def render_midi():
                     instrument.notes.append(note)
                 pos = end
             midi.instruments.append(instrument)
-            midi.dump(os.path.join(dest_dir, f"{n}-gram.mid"))
+            midi.dump(os.path.join(dest_dir, f"rhythm-{n}-gram.mid"))
 
     for kind in ["pitch", "rhythm"]:
-        with open(f"data/ngram_{kind}.pkl", "rb") as f:
+        dict_path = os.path.join(data_dir, f"ngram_{kind}.pkl")
+        with open(dict_path, "rb") as f:
             ngram_dict = pickle.load(f)
 
         k = int(0.05 * len(ngram_dict))
@@ -345,12 +349,12 @@ def render_midi():
             print(f"{n}-gram: {selected}/{total} ({selected/total:.2%})")
 
         if kind == "pitch":
-            render_pitch_ngrams(grouped_ngram_dict, "data/pitch")
+            render_pitch_ngrams(grouped_ngram_dict)
         elif kind == "rhythm":
-            render_rhythm_ngrams(grouped_ngram_dict, "data/rhythm")
+            render_rhythm_ngrams(grouped_ngram_dict)
 
 
-def prepare_lexicon(top_p: float):
+def prepare_lexicon(data_dir: str, top_p: float):
     def prepare_ngram_dict(path: str):
         print(f"preparing lexicon for {path}...")
         with open(path, "rb") as f:
@@ -362,8 +366,8 @@ def prepare_lexicon(top_p: float):
             top_ngram_dict[ngram] = i
         return top_ngram_dict
 
-    pitch_ngram_dict = prepare_ngram_dict("data/ngram_pitch.pkl")
-    rhythm_ngram_dict = prepare_ngram_dict("data/ngram_rhythm.pkl")
+    pitch_ngram_dict = prepare_ngram_dict(os.path.join(data_dir, "ngram_pitch.pkl"))
+    rhythm_ngram_dict = prepare_ngram_dict(os.path.join(data_dir, "ngram_rhythm.pkl"))
 
     # get ngram length range
     pitch_ngram_lengths = set(len(ngram) for ngram in pitch_ngram_dict)
@@ -374,62 +378,55 @@ def prepare_lexicon(top_p: float):
 
     lexicon = {"pitch": pitch_ngram_dict, "rhythm": rhythm_ngram_dict, "ngram_range": ngram_range}
 
-    print("saving lexicon...")
-    with open("data/lexicon.pkl", "wb") as f:
+    dest_path = os.path.join(data_dir, "lexicon.pkl")
+    print(f"saving lexicon to {dest_path}...")
+    with open(dest_path, "wb") as f:
         pickle.dump(lexicon, f)
 
 
-def get_ngram_labels_job(midi_file: str, lexicon: dict):
-    """Get ngrams from a midi file with a given lexicon.
-    Return a dict of kind -> n -> [(ngram_id, note_index)]."""
-    ngram_label_dict = {}
-    ngram_range = lexicon["ngram_range"]
-    for kind in ["pitch", "rhythm"]:
-        if kind == "pitch":
-            ngram_list = extract_pitch_class_ngrams_job(midi_file, ngram_range)
-        elif kind == "rhythm":
-            ngram_list = extract_onset_ngrams_job(midi_file, ngram_range)
-
-        ngram_dict = defaultdict(list)
-        for ngram, index in ngram_list:
-            if ngram in lexicon[kind]:
-                # ngram_id = lexicon[kind][ngram]
-                # ngram_dict[len(ngram)].append((ngram_id, index))
-                ngram_dict[len(ngram)].append(index)
-
-        ngram_label_dict[kind] = ngram_dict
-    return ngram_label_dict
-
-
-def label(midi_dir: str):
-    with open("data/lexicon.pkl", "rb") as f:
+def label_ngram_job(midi_file: str, dest_path: str, lexicon_path: str):
+    """Get ngrams from a midi file with a given lexicon."""
+    with open(lexicon_path, "rb") as f:
         lexicon = pickle.load(f)
 
+    def get_array(ngrams: list, kind: str) -> np.ndarray:
+        rows = []
+        for ngram_tuple in ngrams:
+            ngram, note_index = ngram_tuple
+            if ngram in lexicon[kind]:
+                row = (note_index, len(ngram), lexicon[kind][ngram])
+                rows.append(row)
+
+        # sort ascending by id, then by note index
+        rows.sort(key=lambda x: (x[2], x[0]))
+
+        result = np.zeros((len(rows), 3), dtype=np.uint16)
+        for i, (note_index, ngram_len, ngram_id) in enumerate(rows):
+            result[i, 0] = note_index
+            result[i, 1] = ngram_len
+            result[i, 2] = ngram_id
+        return result
+
+    ngram_range = lexicon["ngram_range"]
+    pitch_ngrams = extract_pitch_class_ngrams_job(midi_file, ngram_range)
+    rhythm_ngrams = extract_onset_ngrams_job(midi_file, ngram_range)
+    pitch_array = get_array(pitch_ngrams, "pitch")
+    rhythm_array = get_array(rhythm_ngrams, "rhythm")
+    os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+    np.savez(dest_path, pitch=pitch_array, rhythm=rhythm_array)
+
+
+def label_ngram(midi_dir: str, data_dir: str, dest_dir: str):
+    lexicon_path = os.path.join(data_dir, "lexicon.pkl")
+
     midi_files = glob(os.path.join(midi_dir + "/**/*.mid"))
-    print(f"getting ngram labels for {len(midi_files)} midi files...")
-    ngram_label_dicts = []
-    for midi_file in tqdm(midi_files):
-        ngram_label_dict = get_ngram_labels_job(midi_file, lexicon)
-        ngram_label_dicts.append(ngram_label_dict)
-    # with Pool() as pool:
-    #     futures = [pool.apply_async(get_ngram_labels_job, args=(midi_file, lexicon)) for midi_file in midi_files]
-    #     ngram_label_dicts = [future.get() for future in tqdm(futures)]
-
-    # merge dicts by filename
-    ngram_label_dict = {}
-    for midi_file, ngram_label_dict_ in zip(midi_files, ngram_label_dicts):
-        ngram_label_dict[midi_file] = ngram_label_dict_
-
-    print("saving ngram labels...")
-    with open("data/ngram_labels.json", "w") as f:
-        json.dump(ngram_label_dict, f, indent=2)
-    with open("data/ngram_labels.pkl", "wb") as f:
-        pickle.dump(ngram_label_dict, f)
-
-
-if __name__ == "__main__":
-    # ngram_range = range(1, 8 + 1)
-    # extract(midi_dir, ngram_range)
-    # render_midi()
-    prepare_lexicon(top_p=0.05)
-    label(midi_dir)
+    print(f"labeling ngram for {len(midi_files)} midi files...")
+    dest_paths = [
+        os.path.join(dest_dir, os.path.relpath(midi_file, midi_dir))[:-4] + "_ngram.npz" for midi_file in midi_files
+    ]
+    with Pool() as pool:
+        futures = [
+            pool.apply_async(label_ngram_job, args=(midi_file, dest_path, lexicon_path))
+            for midi_file, dest_path in zip(midi_files, dest_paths)
+        ]
+        _ = [future.get() for future in tqdm(futures)]
