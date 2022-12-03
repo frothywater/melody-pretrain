@@ -1,20 +1,21 @@
 import os
 from glob import glob
-from typing import Dict, List, Tuple, NamedTuple, Optional
+from typing import Dict, List, NamedTuple, Optional, Tuple
 
 import numpy as np
-
-# import pytorch_lightning as pl
-from torch.utils.data import Dataset
+import lightning as pl
 import torch
+from torch.utils.data import Dataset, DataLoader
 
-from .tokenizer import MIDITokenizer
+from tokenizer import MIDITokenizer
 
 
 class Masking:
     def __init__(self, tokenizer: MIDITokenizer, need_to_mask_per_data: bool = False):
         self.tokenizer = tokenizer
         self.need_to_mask_per_data = need_to_mask_per_data
+        self.pad_token_tensor = torch.from_numpy(self.tokenizer.pad_token_ids)
+        self.mask_token_tensor = torch.from_numpy(self.tokenizer.mask_token_ids)
 
     def _get_length_mask(self, lengths: List[int], seq_len: int) -> torch.Tensor:
         """Get mask for given actual lengths.
@@ -81,8 +82,8 @@ class Masking:
             for start, end in spans:
                 mask_indices[i, start:end] = True
 
-        labels[~mask_indices] = self.tokenizer.pad_token_ids
-        inputs[mask_indices] = self.tokenizer.mask_token_ids
+        labels[~mask_indices] = self.pad_token_tensor
+        inputs[mask_indices] = self.mask_token_tensor
         return inputs, labels
 
     def mask(self, data: np.ndarray, **kwargs) -> Tuple[np.ndarray, np.ndarray]:
@@ -93,8 +94,8 @@ class Masking:
 
 
 class InfillingMasking(Masking):
-    def __init__(self, tokenizer: MIDITokenizer):
-        super().__init__(tokenizer, need_to_mask_per_data=True)
+    def __init__(self, tokenizer: MIDITokenizer, need_to_mask_per_data: bool = False):
+        super().__init__(tokenizer, need_to_mask_per_data)
 
     def mask_for_infilling(self, data: np.ndarray, **kwargs) -> Tuple[np.ndarray, np.ndarray]:
         raise NotImplementedError
@@ -124,16 +125,17 @@ class RandomTokenMasking(Masking):
         # Only mask the tokens that are not padding
         problability_matrix.masked_fill_(self._get_length_mask(lengths, seq_len), value=0.0)
         mask_indices = torch.bernoulli(torch.full(mask_shape, self.mlm_probability)).bool()
-        labels[~mask_indices] = self.tokenizer.pad_token_ids
+        labels[~mask_indices] = self.pad_token_tensor
 
         # 80% of the time, we replace masked input tokens with tokenizer.mask_token ([MASK])
         indices_replaced = torch.bernoulli(torch.full(mask_shape, 0.8)).bool() & mask_indices
-        inputs[indices_replaced] = self.tokenizer.mask_token_ids
+        inputs[indices_replaced] = self.mask_token_tensor
 
         # 10% of the time, we replace masked input tokens with random word
         indices_random = torch.bernoulli(torch.full(mask_shape, 0.5)).bool() & mask_indices & ~indices_replaced
         random_words = torch.stack(
-            [torch.randint(size, mask_shape, dtype=inputs.dtype) for size in self.tokenizer.vocab_size]
+            [torch.randint(size, mask_shape, dtype=inputs.dtype) for size in self.tokenizer.vocab_sizes],
+            dim=-1,
         )
         inputs[indices_random] = random_words[indices_random]
 
@@ -220,7 +222,7 @@ class RandomSpanMasking(InfillingMasking):
             return segment_length
 
         noise_span_lengths = _random_segmentation(num_noise_tokens, num_noise_spans)
-        nonnoise_span_lengths = _random_segmentation(num_nonnoise_tokens, length - num_noise_spans)
+        nonnoise_span_lengths = _random_segmentation(num_nonnoise_tokens, num_noise_spans)
 
         interleaved_span_lengths = np.reshape(
             np.stack([nonnoise_span_lengths, noise_span_lengths], axis=1), [num_noise_spans * 2]
@@ -277,6 +279,7 @@ class RandomBarMasking(InfillingMasking):
     def _process_bar_spans(self, bar_spans: np.ndarray, start: int, end: int) -> np.ndarray:
         """Pick bar spans within given range and shift them to start from 0."""
         bar_spans = bar_spans[(bar_spans[:, 0] >= start) & (bar_spans[:, 1] <= end)]
+        assert len(bar_spans) > 0, "No bar spans found."
         bar_spans = bar_spans - start
         return bar_spans
 
@@ -295,7 +298,7 @@ class RandomBarMasking(InfillingMasking):
         noise_bars[np.random.choice(num_bars, num_noise_bars, replace=False)] = True
         return noise_bars
 
-    def mask(self, data: np.ndarray, bar_spans: np.ndarray, offset: int) -> Tuple[np.ndarray, np.ndarray]:
+    def mask(self, data: np.ndarray, bar_spans: np.ndarray, offset: int, **kwargs) -> Tuple[np.ndarray, np.ndarray]:
         """Mask data with random bars. (MusicBERT-style)
         Args:
             data: (seq_len, num_features)
@@ -308,9 +311,10 @@ class RandomBarMasking(InfillingMasking):
         # TODO: Use BERT-style masking.
         label = data.copy()
         seq_len, _ = data.shape
+        print(data)
 
         bar_spans = self._process_bar_spans(bar_spans, offset, offset + seq_len)
-        noise_bars = self._get_random_noise_bars(bar_spans)
+        noise_bars = self._get_random_noise_bars(len(bar_spans))
         noise_bar_spans = bar_spans[noise_bars]
         mask_indices = np.zeros(seq_len, dtype=bool)
         for start, end in noise_bar_spans:
@@ -320,7 +324,9 @@ class RandomBarMasking(InfillingMasking):
         label[~mask_indices] = self.tokenizer.pad_token_ids
         return data, label
 
-    def mask_for_infilling(self, data: np.ndarray, bar_spans: np.ndarray, offset: int) -> Tuple[np.ndarray, np.ndarray]:
+    def mask_for_infilling(
+        self, data: np.ndarray, bar_spans: np.ndarray, offset: int, **kwargs
+    ) -> Tuple[np.ndarray, np.ndarray]:
         """Mask data with random bars for infilling. Put a single mask token for each bar.
         Args:
             data: (seq_len, num_features)
@@ -332,7 +338,7 @@ class RandomBarMasking(InfillingMasking):
         """
         seq_len, _ = data.shape
         bar_spans = self._process_bar_spans(bar_spans, offset, offset + seq_len)
-        noise_bars = self._get_random_noise_bars(bar_spans)
+        noise_bars = self._get_random_noise_bars(len(bar_spans))
 
         masked_data, target = [], []
         for i, (start, end) in enumerate(bar_spans):
@@ -358,6 +364,7 @@ class RandomNgramMasking(InfillingMasking):
         starts = ngram_spans[:, 0]
         ends = ngram_spans[:, 0] + ngram_spans[:, 1]
         ngram_spans = ngram_spans[(starts >= start) & (ends <= end)]
+        assert len(ngram_spans) > 0, "No ngram spans found."
         result = ngram_spans.copy()
         result[:, 0] -= start
         return result
@@ -393,7 +400,7 @@ class RandomNgramMasking(InfillingMasking):
             print(f"Warning: Not enough ngrams to corrupt, {current_noise_tokens} / {num_noise_tokens}")
         return noise_ngrams
 
-    def mask(self, data: np.ndarray, ngrams: np.ndarray, offset: int) -> Tuple[np.ndarray, np.ndarray]:
+    def mask(self, data: np.ndarray, ngrams: np.ndarray, offset: int, **kwargs) -> Tuple[np.ndarray, np.ndarray]:
         """Mask data with random n-grams.
         Args:
             data: (seq_len, num_features)
@@ -418,7 +425,9 @@ class RandomNgramMasking(InfillingMasking):
         label[~mask_indices] = self.tokenizer.pad_token_ids
         return data, label
 
-    def mask_for_infilling(self, data: np.ndarray, ngrams: np.ndarray, offset: int) -> Tuple[np.ndarray, np.ndarray]:
+    def mask_for_infilling(
+        self, data: np.ndarray, ngrams: np.ndarray, offset: int, **kwargs
+    ) -> Tuple[np.ndarray, np.ndarray]:
         """Mask data with random n-grams. Put a single mask token for each n-gram.
         Args:
             data: (seq_len, num_features)
@@ -511,12 +520,12 @@ class DatasetItem(NamedTuple):
 
 
 class DatasetBatch(NamedTuple):
+    """Note that in PyTorch's padding mask and attention mask, True means to ignore."""
+
     input_ids: torch.Tensor
     label_ids: torch.Tensor
     padding_mask: torch.Tensor
     attention_mask: Optional[torch.Tensor]
-
-    """Note that in PyTorch's padding mask and attention mask, True means to ignore."""
 
 
 class DataCollatorForCausalLanguageModeling(DataCollator):
@@ -552,6 +561,7 @@ class DataCollatorForMaskedLanguageModeling(DataCollator):
 
         # truncate
         data_list, offsets = self.truncate(data_list, self.seq_len, random_crop=self.random_crop)
+        lengths = [len(data) for data in data_list]
         if self.masking.need_to_mask_per_data:
             # mask each data separately, and then pad
             inputs, labels = [], []
@@ -563,12 +573,11 @@ class DataCollatorForMaskedLanguageModeling(DataCollator):
             label_ids = torch.from_numpy(np.stack(self.pad(labels), axis=0))
         else:
             # pad, and then mask all data together
-            lengths = [len(data) for data in batch]
             batch = torch.from_numpy(np.stack(self.pad(data_list), axis=0))
             input_ids, label_ids = self.masking.mask_batch(batch, lengths)
 
         # bidirectional attention mask
-        batch_size, seq_len = input_ids.shape
+        batch_size, seq_len, _ = input_ids.shape
         attention_mask = None
         padding_mask = torch.zeros((batch_size, seq_len), dtype=torch.bool)
         for i, length in enumerate(lengths):
@@ -581,7 +590,7 @@ class DataCollatorForPrefixMaskedLanguageModeling(DataCollator):
         super().__init__(tokenizer, seq_len, random_crop)
         self.masking = masking
 
-    def get_input_and_label(self, masked_data: np.ndarray, target: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    def _get_input_and_label(self, masked_data: np.ndarray, target: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """Get input and label for infilling.
         Args:
             masked_data: (masked_seq_len, num_features)
@@ -595,7 +604,7 @@ class DataCollatorForPrefixMaskedLanguageModeling(DataCollator):
         label = np.concatenate(
             [
                 # pad tokens for masked data
-                np.full((masked_seq_len, self.tokenizer.num_features), self.tokenizer.pad_token_ids),
+                np.full((masked_seq_len, len(self.tokenizer.field_names)), self.tokenizer.pad_token_ids),
                 # causal modeling for infilling data
                 target[1:, :],
                 # pad tokens for the last token
@@ -617,7 +626,7 @@ class DataCollatorForPrefixMaskedLanguageModeling(DataCollator):
             # mask each data separately
             masked_data, target = self.masking.mask_for_infilling(data, offset=offset, **extra_data)
             # construct prefix sequence
-            input, label = self.get_inputs_and_labels(masked_data, target)
+            input, label = self._get_input_and_label(masked_data, target)
             inputs.append(input)
             labels.append(label)
             prefix_lengths.append(len(masked_data))
@@ -626,25 +635,129 @@ class DataCollatorForPrefixMaskedLanguageModeling(DataCollator):
         input_ids = torch.from_numpy(np.stack(self.pad(inputs), axis=0))
         label_ids = torch.from_numpy(np.stack(self.pad(labels), axis=0))
 
-        # prefix attention mask
-        batch_size, seq_len = input_ids.shape
-        attention_mask = []
+        batch_size, seq_len, _ = input_ids.shape
+        attention_masks = []
         padding_mask = torch.zeros((batch_size, seq_len), dtype=torch.bool)
+
+        # prefix attention mask
         for i, (prefix_length, full_length) in enumerate(zip(prefix_lengths, full_lengths)):
-            # bidirectional attention mask for prefix sequence
-            
             padding_mask[i, full_length:] = True
+
+            # bidirectional attention mask for prefix sequence
+            left_prefix_part = torch.zeros((seq_len, prefix_length), dtype=torch.bool)
+
+            target_length = seq_len - prefix_length
+            top_right_target_part = torch.ones((prefix_length, target_length), dtype=torch.bool)
+            # causal attention mask for infilling sequence
+            bottom_right_target_part = torch.triu(
+                torch.ones((target_length, target_length), dtype=torch.bool), diagonal=1
+            )
+
+            right_target_part = torch.cat([top_right_target_part, bottom_right_target_part], dim=0)
+            mask = torch.cat([left_prefix_part, right_target_part], dim=1)
+            attention_masks.append(mask)
+        # (batch_size, seq_len, seq_len)
+        attention_mask = torch.stack(attention_masks, dim=0)
 
         return DatasetBatch(input_ids, label_ids, padding_mask, attention_mask)
 
 
 class MelodyDataset(Dataset):
-    def __init__(self, data_dir: str, seq_len: int = None):
-        self.files = glob(os.path.join(data_dir, "*.npy"))
-        self.data = [np.load(f) for f in self.files]
+    def __init__(self, data_dir: str, load_bar_data: bool = False, load_ngram_data: bool = False):
+        self.files = glob(os.path.join(data_dir, "*.npz"))
+        self.load_bar_data = load_bar_data
+        self.load_ngram_data = load_ngram_data
 
     def __len__(self):
         return len(self.files)
 
     def __getitem__(self, idx):
-        return self.data[idx]
+        file = np.load(self.files[idx])
+        data = file["data"]
+        extra_data = {}
+        if self.load_bar_data:
+            extra_data["bar_spans"] = file["bar_spans"]
+        if self.load_ngram_data:
+            extra_data["pitch_ngrams"] = file["pitch_ngrams"]
+            extra_data["rhythm_ngrams"] = file["rhythm_ngrams"]
+        return DatasetItem(data, extra_data)
+
+
+class MelodyPretrainDataModule(pl.LightningDataModule):
+    def __init__(
+        self,
+        data_dir: str,
+        data_collator: DataCollator,
+        batch_size: int,
+        num_workers: int = 8,
+        load_bar_data: bool = False,
+        load_ngram_data: bool = False,
+    ):
+        super().__init__()
+        self.data_dir = data_dir
+        self.data_collator = data_collator
+        self.batch_size = batch_size
+        self.num_workers = num_workers
+        self.load_bar_data = load_bar_data
+        self.load_ngram_data = load_ngram_data
+
+    def setup(self, stage: str):
+        train_dir = os.path.join(self.data_dir, "train")
+        valid_dir = os.path.join(self.data_dir, "valid")
+        self.train_dataset = MelodyDataset(
+            train_dir, load_bar_data=self.load_bar_data, load_ngram_data=self.load_ngram_data
+        )
+        self.valid_dataset = MelodyDataset(
+            valid_dir, load_bar_data=self.load_bar_data, load_ngram_data=self.load_ngram_data
+        )
+
+    def train_dataloader(self):
+        return DataLoader(
+            self.train_dataset,
+            batch_size=self.batch_size,
+            shuffle=True,
+            drop_last=True,
+            collate_fn=self.data_collator,
+            num_workers=self.num_workers,
+        )
+
+    def val_dataloader(self):
+        return DataLoader(
+            self.valid_dataset,
+            batch_size=self.batch_size,
+            shuffle=True,
+            drop_last=True,
+            collate_fn=self.data_collator,
+            num_workers=self.num_workers,
+        )
+
+
+if __name__ == "__main__":
+    # debug
+    tokenizer = MIDITokenizer()
+    masking = RandomNgramMasking(tokenizer, corruption_rate=0.5)
+    data_collator = DataCollatorForPrefixMaskedLanguageModeling(
+        tokenizer=tokenizer,
+        masking=masking,
+        seq_len=20,
+        random_crop=True,
+    )
+    data_module = MelodyPretrainDataModule(
+        data_dir="experiment/dataset/pretrain_small",
+        data_collator=data_collator,
+        batch_size=2,
+        num_workers=0,
+        load_ngram_data=True,
+    )
+
+    data_module.setup("")
+
+    dataloader = data_module.val_dataloader()
+
+    for batch in dataloader:
+        batch: DatasetBatch
+        print(batch.input_ids)
+        print(batch.label_ids)
+        print(batch.padding_mask)
+        print(batch.attention_mask)
+        break
