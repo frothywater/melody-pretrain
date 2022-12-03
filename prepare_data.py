@@ -8,25 +8,22 @@ from tqdm import tqdm
 from miditoolkit import MidiFile
 
 from melody_pretrain.dataset.tokenizer import MIDITokenizer
-from melody_pretrain.dataset.ngram import label_ngram_job
+from melody_pretrain.dataset.ngram import get_ngram_labels
 
 
 def prepare_data_job(midi_file: str, dest_path: str, tokenizer: MIDITokenizer, lexicon_path: str):
-    array_dest_path = os.path.splitext(dest_path)[0] + ".npy"
-    bar_dest_path = os.path.splitext(dest_path)[0] + "_bar.npy"
-    ngram_dest_path = os.path.splitext(dest_path)[0] + "_ngram.npz"
-
     midi = MidiFile(midi_file)
-    array, bar_spans = tokenizer.encode(midi, return_bar_spans=True)
-    np.save(array_dest_path, array)
-    np.save(bar_dest_path, bar_spans)
-
-    label_ngram_job(midi_file, ngram_dest_path, lexicon_path)
+    data, bar_spans = tokenizer.encode(midi, return_bar_spans=True)
+    pitch_ngrams, rhythm_ngrams = get_ngram_labels(midi_file, lexicon_path)
+    os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+    np.savez(dest_path, data=data, bar_spans=bar_spans, pitch_ngrams=pitch_ngrams, rhythm_ngrams=rhythm_ngrams)
 
 
 def prepare_data(midi_dir: str, dataset_dir: str, **kwargs):
     midi_files = glob(midi_dir + "/**/*.mid", recursive=True)
-    dest_paths = [os.path.join(dataset_dir, os.path.relpath(midi_file, midi_dir)) for midi_file in midi_files]
+    dest_paths = [
+        os.path.join(dataset_dir, os.path.relpath(midi_file, midi_dir)[:-4] + ".npz") for midi_file in midi_files
+    ]
     lexicon_path = os.path.join(dataset_dir, "ngram_data", "lexicon.pkl")
 
     print(f"preparing {len(midi_files)} midi files...")

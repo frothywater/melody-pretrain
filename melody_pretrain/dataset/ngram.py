@@ -384,7 +384,7 @@ def prepare_lexicon(data_dir: str, top_p: float):
         pickle.dump(lexicon, f)
 
 
-def label_ngram_job(midi_file: str, dest_path: str, lexicon_path: str):
+def get_ngram_labels(midi_file: str, lexicon_path: str):
     """Get ngrams from a midi file with a given lexicon."""
     with open(lexicon_path, "rb") as f:
         lexicon = pickle.load(f)
@@ -400,7 +400,7 @@ def label_ngram_job(midi_file: str, dest_path: str, lexicon_path: str):
         # sort ascending by id, then by note index
         rows.sort(key=lambda x: (x[2], x[0]))
 
-        result = np.zeros((len(rows), 3), dtype=np.uint16)
+        result = np.zeros((len(rows), 3), dtype=np.int16)
         for i, (note_index, ngram_len, ngram_id) in enumerate(rows):
             result[i, 0] = note_index
             result[i, 1] = ngram_len
@@ -412,5 +412,4 @@ def label_ngram_job(midi_file: str, dest_path: str, lexicon_path: str):
     rhythm_ngrams = extract_onset_ngrams_job(midi_file, ngram_range)
     pitch_array = get_array(pitch_ngrams, "pitch")
     rhythm_array = get_array(rhythm_ngrams, "rhythm")
-    os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-    np.savez(dest_path, pitch=pitch_array, rhythm=rhythm_array)
+    return pitch_array, rhythm_array

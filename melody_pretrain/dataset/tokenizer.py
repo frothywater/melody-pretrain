@@ -107,7 +107,7 @@ class MIDITokenizer:
         return tokens
 
     def convert_tokens_to_ids(self, tokens: List[MIDICompoundToken]) -> np.ndarray:
-        token_ids = np.zeros((len(tokens), len(self.field_names)), dtype=np.uint16)
+        token_ids = np.zeros((len(tokens), len(self.field_names)), dtype=np.int16)
         for index, token in enumerate(tokens):
             for field_index, field_name in enumerate(self.field_names):
                 field = token[field_index]
@@ -155,8 +155,8 @@ class MIDITokenizer:
         bar_field_index = self.field_indices["bar"]
         bar_fields = token_ids[:, bar_field_index]
         bar_start_mask = np.concatenate([[True], bar_fields[:-1] != bar_fields[1:]])
-        bar_start_indices = np.extract(bar_start_mask, np.arange(num_tokens))
-        bar_end_indices = np.concatenate([bar_start_indices[1:], [num_tokens]])
+        bar_start_indices = np.extract(bar_start_mask, np.arange(num_tokens, dtype=np.int16))
+        bar_end_indices = np.concatenate([bar_start_indices[1:], [num_tokens]], dtype=np.int16)
         bar_spans = np.stack([bar_start_indices, bar_end_indices], axis=1)
         return bar_spans
 
