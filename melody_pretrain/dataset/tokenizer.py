@@ -1,22 +1,28 @@
 from math import floor, log2
-from typing import List, Dict, NamedTuple
+from typing import List, Dict, NamedTuple, Union
 from miditoolkit import MidiFile, Instrument, Note
 import numpy as np
 
 
-class MIDITokenItem(NamedTuple):
-    """NamedTuple for MIDI token. One token is one note."""
-    bar: int
-    position: int
-    duration: int
-    pitch: int
+Field = int
+SpecialTokenField = str
+AnyField = Union[Field, SpecialTokenField]
+
+
+class MIDICompoundToken(NamedTuple):
+    """NamedTuple for MIDI compound token.
+    One compound token represents one note. Each field is a feature of the note."""
+
+    bar: AnyField
+    position: AnyField
+    duration: AnyField
+    pitch: AnyField
 
 
 class MIDITokenizer:
-    def __init__(self, granularity=64, max_bar=128, default_velocity=100, pitch_range=range(0, 128)) -> None:
+    def __init__(self, granularity=64, max_bar=128, pitch_range=range(0, 128)) -> None:
         self.granularity = granularity
         self.max_bar = max_bar
-        self.default_velocity = default_velocity
 
         self.pitch_range = pitch_range
         self.ticks_per_bar = 1920
@@ -33,83 +39,150 @@ class MIDITokenizer:
         triplet_duration = set([self.ticks_per_bar // (3 * 2**r) for r in range(triplet_ratio + 1)])
         self.duration_bins = sorted(double_duration | triplet_duration)
 
-        self.field_names = MIDITokenItem._fields
-        # padding id=0, field=None
+        # vocabularies for each field
+        self.field_names = MIDICompoundToken._fields
+        self.field_indices = {name: index for index, name in enumerate(self.field_names)}
+        self.vocabularies: Dict[str, List[int]] = {}
+        self.vocabularies["bar"] = list(range(max_bar))
+        self.vocabularies["position"] = self.position_bins
+        self.vocabularies["duration"] = self.duration_bins
+        self.vocabularies["pitch"] = list(pitch_range)
+        self.vocab_sizes = [len(self.vocabularies[field_name]) for field_name in self.field_names]
+        self.field_sizes = list(self.vocab_sizes)  # will be modified when adding special tokens
 
-        # {field name: {field: token id}}
-        field_to_id_dict: Dict[str, Dict[int, int]] = {}
-        field_to_id_dict["bar"] = {bar: i + 1 for i, bar in enumerate(range(max_bar))}
-        field_to_id_dict["position"] = {position: i + 1 for i, position in enumerate(self.position_bins)}
-        field_to_id_dict["duration"] = {duration: i + 1 for i, duration in enumerate(self.duration_bins)}
-        field_to_id_dict["pitch"] = {pitch: i + 1 for i, pitch in enumerate(pitch_range)}
-        self.field_to_id_dict = field_to_id_dict
+        # create encoder and decoder for mapping between token field and id
+        self.encoder: Dict[str, Dict[AnyField, int]] = {
+            field_name: {field: index for index, field in enumerate(self.vocabularies[field_name])}
+            for field_name in self.field_names
+        }
+        self.decoder: Dict[str, Dict[int, AnyField]] = {
+            field_name: {index: field for index, field in enumerate(self.vocabularies[field_name])}
+            for field_name in self.field_names
+        }
 
-        # {field name: {token id: field}}
-        id_to_field_dict: Dict[str, Dict[int, int]] = {}
-        for field_name in self.field_names:
-            id_to_field_dict[field_name] = {token_id: field for field, token_id in field_to_id_dict[field_name].items()}
-            id_to_field_dict[field_name][0] = None
-        self.id_to_field_dict = id_to_field_dict
+        # add special tokens
+        self.bos_token_str = "<BOS>"
+        self.eos_token_str = "<EOS>"
+        self.pad_token_str = "<PAD>"
+        self.sep_token_str = "<SEP>"
+        self.mask_token_str = "[MASK]"
+        self.bos_token = MIDICompoundToken(*[self.bos_token_str] * len(self.field_names))
+        self.eos_token = MIDICompoundToken(*[self.eos_token_str] * len(self.field_names))
+        self.pad_token = MIDICompoundToken(*[self.pad_token_str] * len(self.field_names))
+        self.sep_token = MIDICompoundToken(*[self.sep_token_str] * len(self.field_names))
+        self.mask_token = MIDICompoundToken(*[self.mask_token_str] * len(self.field_names))
+        self.special_token_str = [
+            self.bos_token_str,
+            self.eos_token_str,
+            self.pad_token_str,
+            self.sep_token_str,
+            self.mask_token_str,
+        ]
 
-    def midi_to_items(self, midi: MidiFile) -> List[MIDITokenItem]:
+        for field_index, field_name in enumerate(self.field_names):
+            for i, token_str in enumerate(self.special_token_str):
+                token_id = len(self.vocabularies[field_name]) + i
+                self.encoder[field_name][token_str] = token_id
+                self.decoder[field_name][token_id] = token_str
+            self.field_sizes[field_index] += len(self.special_token_str)
+
+        self.bos_token_ids = self.convert_tokens_to_ids([self.bos_token])[0]
+        self.eos_token_ids = self.convert_tokens_to_ids([self.eos_token])[0]
+        self.pad_token_ids = self.convert_tokens_to_ids([self.pad_token])[0]
+        self.sep_token_ids = self.convert_tokens_to_ids([self.sep_token])[0]
+        self.mask_token_ids = self.convert_tokens_to_ids([self.mask_token])[0]
+        self.special_token_id_matrix = np.array(
+            [self.bos_token_ids, self.eos_token_ids, self.pad_token_ids, self.sep_token_ids, self.mask_token_ids]
+        ).T  # (num_features, num_tokens)
+
+    def tokenize(self, midi: MidiFile) -> List[MIDICompoundToken]:
         assert len(midi.instruments) == 1, "Only support single instrument midi file."
 
-        result: List[MIDITokenItem] = []
+        tokens: List[MIDICompoundToken] = []
         for note in midi.instruments[0].notes:
-            bar = note.start // self.ticks_per_bar
-            if bar >= self.max_bar:
-                continue
+            bar = (note.start // self.ticks_per_bar) % self.max_bar
             position = self._find_nearest(self.position_bins, note.start % self.ticks_per_bar)
             duration = self._find_nearest(self.duration_bins, note.end - note.start)
-            result.append(MIDITokenItem(bar, position, duration, note.pitch))
-        return result
+            tokens.append(MIDICompoundToken(bar, position, duration, note.pitch))
+        return tokens
 
-    def items_to_tokens(self, items: List[MIDITokenItem]) -> np.ndarray:
-        result = np.zeros((len(items), len(self.field_names)), dtype=np.uint16)
-        for index, item in enumerate(items):
+    def convert_tokens_to_ids(self, tokens: List[MIDICompoundToken]) -> np.ndarray:
+        token_ids = np.zeros((len(tokens), len(self.field_names)), dtype=np.uint16)
+        for index, token in enumerate(tokens):
             for field_index, field_name in enumerate(self.field_names):
-                field = item[field_index]
-                result[index, field_index] = self.field_to_id_dict[field_name][field]
-        return result
+                field = token[field_index]
+                token_ids[index, field_index] = self.encoder[field_name][field]
+        return token_ids
 
-    def tokens_to_items(self, tokens: np.ndarray) -> List[MIDITokenItem]:
+    def convert_ids_to_tokens(self, tokens: np.ndarray) -> List[MIDICompoundToken]:
         assert tokens.ndim == 2, "tokens should be 2D array."
         length, field_count = tokens.shape
         assert field_count == len(self.field_names), "field count should be equal to field names."
 
-        result: List[MIDITokenItem] = []
+        result: List[MIDICompoundToken] = []
         for index in range(length):
             fields = []
             for field_index, field_name in enumerate(self.field_names):
                 token = tokens[index, field_index]
-                field = self.id_to_field_dict[field_name][token]
+                field = self.decoder[field_name].get(token, None)
                 fields.append(field)
-            result.append(MIDITokenItem(*fields))
+            result.append(MIDICompoundToken(*fields))
         return result
 
-    def items_to_midi(self, items: List[MIDITokenItem]) -> MidiFile:
+    def detokenize(self, tokens: List[MIDICompoundToken], velocity=100) -> MidiFile:
         midi = MidiFile()
         notes = []
-        for item in items:
-            start = item.bar * self.ticks_per_bar + item.position
-            end = item.bar * self.ticks_per_bar + item.position + item.duration
-            note = Note(velocity=self.default_velocity, pitch=item.pitch, start=start, end=end)
+        for token in tokens:
+            if any([field is None or field in self.special_token_str for field in token]):
+                continue
+            start = token.bar * self.ticks_per_bar + token.position
+            end = token.bar * self.ticks_per_bar + token.position + token.duration
+            note = Note(velocity=velocity, pitch=token.pitch, start=start, end=end)
             notes.append(note)
         instrument = Instrument(program=0)
         instrument.notes.extend(notes)
         midi.instruments.append(instrument)
         return midi
 
-    def tokenize(self, midi_path: str) -> np.ndarray:
-        """Tokenize a MIDI file.
-        Result: tokens, (length, field)"""
-        midi = MidiFile(midi_path)
-        items = self.midi_to_items(midi)
-        return self.items_to_tokens(items)
+    def get_bar_spans(self, token_ids: np.ndarray) -> np.ndarray:
+        """Get bar spans for each token.
+        Args:
+            token_ids: (num_tokens, num_features)
+        Returns:
+            bar_spans: (num_bars, 2) array, each row is [start, end) of bar span.
+        """
+        num_tokens, _ = token_ids.shape
+        bar_field_index = self.field_indices["bar"]
+        bar_fields = token_ids[:, bar_field_index]
+        bar_start_mask = np.concatenate([[True], bar_fields[:-1] != bar_fields[1:]])
+        bar_start_indices = np.extract(bar_start_mask, np.arange(num_tokens))
+        bar_end_indices = np.concatenate([bar_start_indices[1:], [num_tokens]])
+        bar_spans = np.stack([bar_start_indices, bar_end_indices], axis=1)
+        return bar_spans
 
-    def detokenize(self, tokens: np.ndarray) -> MidiFile:
-        items = self.tokens_to_items(tokens)
-        return self.items_to_midi(items)
+    def encode(self, midi: MidiFile, return_bar_spans: bool = False) -> np.ndarray:
+        """Encode midi file to token ids.
+        Args:
+            midi: midi file to encode.
+        Returns:
+            token_ids: (length, field)
+        """
+        tokens = self.tokenize(midi)
+        token_ids = self.convert_tokens_to_ids(tokens)
+        if return_bar_spans:
+            bar_spans = self.get_bar_spans(token_ids)
+            return token_ids, bar_spans
+        return token_ids
+
+    def decode(self, token_ids: np.ndarray) -> MidiFile:
+        """Decode token ids to midi file.
+        Args:
+            token_ids: (length, field)
+        Returns:
+            midi: decoded midi file.
+        """
+        tokens = self.convert_ids_to_tokens(token_ids)
+        return self.detokenize(tokens)
 
     def _find_nearest(self, bins: List[int], value: int) -> int:
         """Find the nearest bin to the value."""
@@ -117,14 +190,14 @@ class MIDITokenizer:
 
     def __str__(self) -> str:
         info_str = f"representation: granularity={self.granularity}"
-        token_size_str = ", ".join([f"{field_name}={len(d)}" for field_name, d in self.id_to_field_dict])
+        token_size_str = ", ".join([f"{field_name}={len(d)}" for field_name, d in self.encoder.items()])
         return info_str + "\n" + token_size_str
 
 
 if __name__ == "__main__":
     tokenizer = MIDITokenizer()
-    print(tokenizer.field_to_id_dict)
-    tokens = tokenizer.tokenize("data/test.mid")
+    print(tokenizer.encoder)
+    tokens = tokenizer.encode("data/test.mid")
     print(tokens)
-    midi = tokenizer.detokenize(tokens)
+    midi = tokenizer.decode(tokens)
     midi.dump("data/test_back.mid")
