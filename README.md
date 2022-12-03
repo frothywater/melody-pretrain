@@ -11,6 +11,6 @@ python lexicon.py render \
 
 python prepare_data.py \
 --midi_dir ../midi-preprocess/data/done \
---dest_dir experiment/dataset/pretrain_small \
+--dataset_dir experiment/dataset/pretrain_small \
 --granularity 64 --max_bar 128 --pitch_range 0 128
 ```
