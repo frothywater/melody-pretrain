@@ -414,19 +414,3 @@ def label_ngram_job(midi_file: str, dest_path: str, lexicon_path: str):
     rhythm_array = get_array(rhythm_ngrams, "rhythm")
     os.makedirs(os.path.dirname(dest_path), exist_ok=True)
     np.savez(dest_path, pitch=pitch_array, rhythm=rhythm_array)
-
-
-def label_ngram(midi_dir: str, data_dir: str, dest_dir: str):
-    lexicon_path = os.path.join(data_dir, "lexicon.pkl")
-
-    midi_files = glob(os.path.join(midi_dir + "/**/*.mid"))
-    print(f"labeling ngram for {len(midi_files)} midi files...")
-    dest_paths = [
-        os.path.join(dest_dir, os.path.relpath(midi_file, midi_dir))[:-4] + "_ngram.npz" for midi_file in midi_files
-    ]
-    with Pool() as pool:
-        futures = [
-            pool.apply_async(label_ngram_job, args=(midi_file, dest_path, lexicon_path))
-            for midi_file, dest_path in zip(midi_files, dest_paths)
-        ]
-        _ = [future.get() for future in tqdm(futures)]
