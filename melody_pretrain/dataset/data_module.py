@@ -2,10 +2,10 @@ import os
 from glob import glob
 from typing import Dict, List, NamedTuple, Optional, Tuple
 
-import numpy as np
 import lightning as pl
+import numpy as np
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import DataLoader, Dataset
 
 from .tokenizer import MIDITokenizer
 
@@ -429,8 +429,8 @@ class RandomNgramMasking(InfillingMasking):
             covered_indices[start : start + length] = True
             current_noise_tokens += length
 
-        if current_noise_tokens < num_noise_tokens:
-            print(f"Warning: Not enough ngrams to corrupt, {current_noise_tokens} / {num_noise_tokens}")
+        # if current_noise_tokens < num_noise_tokens:
+        # print(f"Warning: Not enough ngrams to corrupt, {current_noise_tokens} / {num_noise_tokens}")
         return noise_ngrams
 
     def mask(self, data: np.ndarray, offset: int, **kwargs) -> Tuple[np.ndarray, np.ndarray]:
@@ -722,7 +722,7 @@ class MelodyPretrainDataModule(pl.LightningDataModule):
         dataset_dir: str,
         data_collator: DataCollator,
         batch_size: int,
-        num_workers: int = 4,
+        num_workers: int = 0,
         load_bar_data: bool = False,
         load_ngram_data: bool = False,
     ):

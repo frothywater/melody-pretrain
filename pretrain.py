@@ -1,11 +1,11 @@
-from argparse import ArgumentParser
 import os
+from argparse import ArgumentParser
+
 from lightning import Trainer
 from lightning.lite.utilities.seed import seed_everything
-# from lightning.lite.strategies import DDPStrategy
-from lightning.pytorch.callbacks import EarlyStopping, LearningRateMonitor
+from lightning.pytorch.callbacks import EarlyStopping, LearningRateMonitor, StochasticWeightAveraging
+from lightning.pytorch.strategies import DDPStrategy
 
-from melody_pretrain.dataset.tokenizer import MIDITokenizer
 from melody_pretrain.dataset.data_module import (
     DataCollatorForPrefixMaskedLanguageModeling,
     MelodyPretrainDataModule,
@@ -13,13 +13,14 @@ from melody_pretrain.dataset.data_module import (
     RandomNgramMasking,
     SingleSpanMasking,
 )
+from melody_pretrain.dataset.tokenizer import MIDITokenizer
 from melody_pretrain.model import MelodyPretrainModel
 
 
 def main():
     parser = ArgumentParser()
     parser.add_argument("--seq_len", type=int, default=512)
-    parser.add_argument("--patience", type=int, default=10)
+    parser.add_argument("--patience", type=int, default=3)
     parser.add_argument("--min_delta", type=float, default=0.0)
     parser.add_argument("--seed", type=int, default=42)
 
@@ -33,12 +34,11 @@ def main():
     seed_everything(args.seed, workers=True)
     early_stopping = EarlyStopping(monitor="val_loss", patience=args.patience, min_delta=args.min_delta)
     lr_monitor = LearningRateMonitor(logging_interval="step")
-    # strategy = DDPStrategy(find_unused_parameters=False)
+    swa = StochasticWeightAveraging(swa_lrs=1e-2)
     trainer: Trainer = Trainer.from_argparse_args(
         args,
-        callbacks=[early_stopping, lr_monitor],
-        gradient_clip_val=1.0,
-        # strategy=strategy,
+        callbacks=[early_stopping, lr_monitor, swa],
+        strategy=DDPStrategy(find_unused_parameters=False),
     )
 
     # tokenizer
@@ -60,15 +60,17 @@ def main():
         seq_len=args.seq_len,
         random_crop=True,
     )
-    data_module = MelodyPretrainDataModule(
-        dataset_dir=args.dataset_dir,
-        batch_size=args.batch_size,
-        data_collator=data_collator,
-        load_ngram_data=True,
+    data_module = MelodyPretrainDataModule.from_argparse_args(args, data_collator=data_collator)
+    # Need setup data module manually to get the total steps for configuring the scheduler
+    data_module.setup("fit")
+    total_steps = (
+        len(data_module.train_dataloader())
+        * trainer.max_epochs
+        // (trainer.num_devices * trainer.accumulate_grad_batches)
     )
 
     # model
-    model = MelodyPretrainModel(tokenizer=tokenizer, **vars(args))
+    model = MelodyPretrainModel(tokenizer=tokenizer, total_steps=total_steps, **vars(args))
 
     # train
     trainer.fit(model, data_module)
