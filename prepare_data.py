@@ -49,6 +49,7 @@ if __name__ == "__main__":
 
     # save tokenizer config
     json_path = os.path.join(args.dataset_dir, "tokenizer_config.json")
+    os.makedirs(os.path.dirname(json_path), exist_ok=True)
     with open(json_path, "w") as f:
         json.dump({
             "granularity": args.granularity,

@@ -161,11 +161,14 @@ class MelodyPretrainModel(pl.LightningModule):
         return loss
 
     def step(self, batch: DatasetBatch) -> List[torch.Tensor]:
-        # attention_mask: (batch_size * num_heads, seq_len, seq_len)
         batch_size, seq_len, _ = batch.input_ids.shape
-        attn_mask = batch.attention_mask.expand(self.num_heads, -1, -1, -1).reshape(
-            self.num_heads * batch_size, seq_len, seq_len
-        )
+        if len(batch.attention_mask.shape) == 3:
+            # attention_mask: (batch_size * num_heads, seq_len, seq_len)
+            attn_mask = batch.attention_mask.expand(self.num_heads, -1, -1, -1).reshape(
+                self.num_heads * batch_size, seq_len, seq_len
+            )
+        else:
+            attn_mask = batch.attention_mask
         logits = self(batch.input_ids, batch.padding_mask, attn_mask)
         return logits
 
@@ -182,4 +185,10 @@ class MelodyPretrainModel(pl.LightningModule):
         logits = self.step(batch)
         loss = self.get_loss(logits, batch.label_ids)
         self.log("val_loss", loss, sync_dist=True)
+        return loss
+    
+    def test_step(self, batch: DatasetBatch, batch_idx: int) -> torch.Tensor:
+        logits = self.step(batch)
+        loss = self.get_loss(logits, batch.label_ids)
+        self.log("test_loss", loss, sync_dist=True)
         return loss

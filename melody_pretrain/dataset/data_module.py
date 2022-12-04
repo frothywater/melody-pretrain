@@ -562,20 +562,29 @@ class DatasetBatch(NamedTuple):
 
 
 class DataCollatorForCausalLanguageModeling(DataCollator):
-    def __init__(self, tokenizer: MIDITokenizer, seq_len: int, random_crop: bool = False):
+    def __init__(
+        self, tokenizer: MIDITokenizer, seq_len: int, random_crop: bool = False, add_trailing_mask: bool = False
+    ):
         super().__init__(tokenizer, seq_len, random_crop)
+        self.add_trailing_mask = add_trailing_mask
 
     def __call__(self, batch: List[DatasetItem]) -> Tuple[torch.Tensor, torch.Tensor]:
         data_list = [item.data for item in batch]
 
-        data_list, lengths = self.truncate(data_list, self.seq_len + 1, random_crop=self.random_crop)
+        raw_length = self.seq_len if self.add_trailing_mask else self.seq_len + 1
+        data_list, _ = self.truncate(data_list, raw_length, random_crop=self.random_crop)
+        # if self.add_trailing_mask:
+        #     for i, data in enumerate(data_list):
+        #         data = np.concatenate([data, [self.tokenizer.mask_token_ids]], axis=0)
+
+        lengths = [len(data) for data in data_list]
         data_list = self.pad(data_list)
         batched_data = np.stack(data_list, axis=0)
         input_ids = torch.from_numpy(batched_data[:, :-1]).long()
         label_ids = torch.from_numpy(batched_data[:, 1:]).long()
 
         # causal attention mask
-        batch_size, seq_len = input_ids.shape
+        batch_size, seq_len, _ = input_ids.shape
         attention_mask = torch.triu(torch.ones((seq_len, seq_len), dtype=torch.bool), diagonal=1)
         padding_mask = torch.zeros((batch_size, seq_len), dtype=torch.bool)
         for i, length in enumerate(lengths):
@@ -737,12 +746,18 @@ class MelodyPretrainDataModule(pl.LightningDataModule):
     def setup(self, stage: str):
         train_dir = os.path.join(self.dataset_dir, "train")
         valid_dir = os.path.join(self.dataset_dir, "valid")
+        test_dir = os.path.join(self.dataset_dir, "test")
         self.train_dataset = MelodyDataset(
             train_dir, load_bar_data=self.load_bar_data, load_ngram_data=self.load_ngram_data
         )
-        self.valid_dataset = MelodyDataset(
-            valid_dir, load_bar_data=self.load_bar_data, load_ngram_data=self.load_ngram_data
-        )
+        if os.path.exists(valid_dir):
+            self.valid_dataset = MelodyDataset(
+                valid_dir, load_bar_data=self.load_bar_data, load_ngram_data=self.load_ngram_data
+            )
+        if os.path.exists(test_dir):
+            self.test_dataset = MelodyDataset(
+                test_dir, load_bar_data=self.load_bar_data, load_ngram_data=self.load_ngram_data
+            )
 
     def train_dataloader(self):
         return DataLoader(
@@ -764,42 +779,11 @@ class MelodyPretrainDataModule(pl.LightningDataModule):
             pin_memory=True,
         )
 
-
-if __name__ == "__main__":
-    # debug
-    tokenizer = MIDITokenizer()
-
-    masking = MultiTargetInfillingMasking(
-        (
-            RandomNgramMasking(tokenizer, corruption_rate=0.2, extra_data_field_name="pitch_ngrams"),
-            RandomNgramMasking(tokenizer, corruption_rate=0.2, extra_data_field_name="rhythm_ngrams"),
-            SingleSpanMasking(tokenizer, corruption_rate=0.5),
-        ),
-        probabilities=(0.4, 0.4, 0.2),
-    )
-
-    data_collator = DataCollatorForPrefixMaskedLanguageModeling(
-        tokenizer=tokenizer,
-        masking=masking,
-        seq_len=20,
-        random_crop=True,
-    )
-    data_module = MelodyPretrainDataModule(
-        dataset_dir="experiment/dataset/pretrain_small",
-        data_collator=data_collator,
-        batch_size=5,
-        num_workers=0,
-        load_ngram_data=True,
-    )
-
-    data_module.setup("")
-
-    dataloader = data_module.val_dataloader()
-
-    for batch in dataloader:
-        batch: DatasetBatch
-        print(batch.input_ids)
-        print(batch.label_ids)
-        print(batch.padding_mask)
-        print(batch.attention_mask)
-        break
+    def test_dataloader(self):
+        return DataLoader(
+            self.test_dataset,
+            batch_size=self.batch_size,
+            collate_fn=self.data_collator,
+            num_workers=self.num_workers,
+            pin_memory=True,
+        )
