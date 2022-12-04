@@ -11,9 +11,14 @@ from tokenizer import MIDITokenizer
 
 
 class Masking:
-    def __init__(self, tokenizer: MIDITokenizer, need_to_mask_per_data: bool = False):
+
+    # For MLM, this field indicates whether the strategy needs to perform masking on each sequence separately,
+    # if not, the strategy will perform masking on the whole batch.
+    # For text infilling, masking is always performed on each sequence separately.
+    need_to_mask_per_data: bool = False
+
+    def __init__(self, tokenizer: MIDITokenizer):
         self.tokenizer = tokenizer
-        self.need_to_mask_per_data = need_to_mask_per_data
         self.pad_token_tensor = torch.from_numpy(self.tokenizer.pad_token_ids)
         self.mask_token_tensor = torch.from_numpy(self.tokenizer.mask_token_ids)
 
@@ -94,17 +99,37 @@ class Masking:
 
 
 class InfillingMasking(Masking):
-    def __init__(self, tokenizer: MIDITokenizer, need_to_mask_per_data: bool = False):
-        super().__init__(tokenizer, need_to_mask_per_data)
+    def __init__(self, tokenizer: MIDITokenizer):
+        super().__init__(tokenizer)
 
     def mask_for_infilling(self, data: np.ndarray, **kwargs) -> Tuple[np.ndarray, np.ndarray]:
         raise NotImplementedError
 
 
+class MultiTargetInfillingMasking(InfillingMasking):
+    """Randomly choose a masking strategy for each batch."""
+
+    def __init__(self, maskings: Tuple[InfillingMasking, ...], probabilities: Tuple[float, ...]):
+        assert len(maskings) == len(probabilities), "Number of maskings should be the same as number of probabilities"
+        self.maskings = maskings
+        self.probabilities = probabilities
+        self.need_to_mask_per_data = any(masking.need_to_mask_per_data for masking in maskings)
+
+    def mask(self, data: np.ndarray, **kwargs) -> Tuple[np.ndarray, np.ndarray]:
+        index = np.random.choice(len(self.maskings), p=self.probabilities)
+        masking = self.maskings[index]
+        return masking.mask(data, **kwargs)
+
+    def mask_for_infilling(self, data: np.ndarray, **kwargs) -> Tuple[np.ndarray, np.ndarray]:
+        index = np.random.choice(len(self.maskings), p=self.probabilities)
+        masking = self.maskings[index]
+        return masking.mask_for_infilling(data, **kwargs)
+
+
 class RandomTokenMasking(Masking):
-    def __init__(self, tokenizer: MIDITokenizer, mlm_probability: float = 0.15):
+    def __init__(self, tokenizer: MIDITokenizer, corruption_rate: float = 0.15):
         super().__init__(tokenizer)
-        self.mlm_probability = mlm_probability
+        self.corruption_rate = corruption_rate
 
     def mask_batch(self, inputs: torch.Tensor, lengths: List[int]) -> Tuple[torch.Tensor, torch.Tensor]:
         """Mask input batch. (BERT style)
@@ -121,10 +146,10 @@ class RandomTokenMasking(Masking):
         batch_size, seq_len, _ = inputs.shape
         mask_shape = (batch_size, seq_len)
 
-        problability_matrix = torch.full(mask_shape, self.mlm_probability)
+        problability_matrix = torch.full(mask_shape, self.corruption_rate)
         # Only mask the tokens that are not padding
         problability_matrix.masked_fill_(self._get_length_mask(lengths, seq_len), value=0.0)
-        mask_indices = torch.bernoulli(torch.full(mask_shape, self.mlm_probability)).bool()
+        mask_indices = torch.bernoulli(torch.full(mask_shape, self.corruption_rate)).bool()
         labels[~mask_indices] = self.pad_token_tensor
 
         # 80% of the time, we replace masked input tokens with tokenizer.mask_token ([MASK])
@@ -270,11 +295,16 @@ class RandomSpanMasking(InfillingMasking):
 
 
 class RandomBarMasking(InfillingMasking):
-    def __init__(self, tokenizer: MIDITokenizer, corruption_rate: float = 0.15):
-        super().__init__(tokenizer, need_to_mask_per_data=True)
+    need_to_mask_per_data = True
+
+    def __init__(
+        self, tokenizer: MIDITokenizer, corruption_rate: float = 0.15, extra_data_field_name: str = "bar_spans"
+    ):
+        super().__init__(tokenizer)
         self.corruption_rate = corruption_rate
         self.bar_field_index = tokenizer.field_names.index("bar")
         self.bar_vocab_size = tokenizer.vocab_sizes[self.bar_field_index]
+        self.extra_data_field_name = extra_data_field_name
 
     def _process_bar_spans(self, bar_spans: np.ndarray, start: int, end: int) -> np.ndarray:
         """Pick bar spans within given range and shift them to start from 0."""
@@ -298,7 +328,7 @@ class RandomBarMasking(InfillingMasking):
         noise_bars[np.random.choice(num_bars, num_noise_bars, replace=False)] = True
         return noise_bars
 
-    def mask(self, data: np.ndarray, bar_spans: np.ndarray, offset: int, **kwargs) -> Tuple[np.ndarray, np.ndarray]:
+    def mask(self, data: np.ndarray, offset: int, **kwargs) -> Tuple[np.ndarray, np.ndarray]:
         """Mask data with random bars. (MusicBERT-style)
         Args:
             data: (seq_len, num_features)
@@ -313,6 +343,7 @@ class RandomBarMasking(InfillingMasking):
         seq_len, _ = data.shape
         print(data)
 
+        bar_spans = kwargs[self.extra_data_field_name]
         bar_spans = self._process_bar_spans(bar_spans, offset, offset + seq_len)
         noise_bars = self._get_random_noise_bars(len(bar_spans))
         noise_bar_spans = bar_spans[noise_bars]
@@ -324,9 +355,7 @@ class RandomBarMasking(InfillingMasking):
         label[~mask_indices] = self.tokenizer.pad_token_ids
         return data, label
 
-    def mask_for_infilling(
-        self, data: np.ndarray, bar_spans: np.ndarray, offset: int, **kwargs
-    ) -> Tuple[np.ndarray, np.ndarray]:
+    def mask_for_infilling(self, data: np.ndarray, offset: int, **kwargs) -> Tuple[np.ndarray, np.ndarray]:
         """Mask data with random bars for infilling. Put a single mask token for each bar.
         Args:
             data: (seq_len, num_features)
@@ -337,6 +366,7 @@ class RandomBarMasking(InfillingMasking):
             target: (infilling_seq_len, num_features), with form of {<SEP>, tokens, ...}
         """
         seq_len, _ = data.shape
+        bar_spans = kwargs[self.extra_data_field_name]
         bar_spans = self._process_bar_spans(bar_spans, offset, offset + seq_len)
         noise_bars = self._get_random_noise_bars(len(bar_spans))
 
@@ -355,9 +385,12 @@ class RandomBarMasking(InfillingMasking):
 
 
 class RandomNgramMasking(InfillingMasking):
-    def __init__(self, tokenizer: MIDITokenizer, corruption_rate: float = 0.15):
-        super().__init__(tokenizer, need_to_mask_per_data=True)
+    need_to_mask_per_data = True
+
+    def __init__(self, tokenizer: MIDITokenizer, corruption_rate: float = 0.15, extra_data_field_name: str = "ngrams"):
+        super().__init__(tokenizer)
         self.corruption_rate = corruption_rate
+        self.extra_data_field_name = extra_data_field_name
 
     def _process_ngram_spans(self, ngram_spans: np.ndarray, start: int, end: int) -> np.ndarray:
         """Pick ngram spans within given range and shift them to start from 0."""
@@ -400,7 +433,7 @@ class RandomNgramMasking(InfillingMasking):
             print(f"Warning: Not enough ngrams to corrupt, {current_noise_tokens} / {num_noise_tokens}")
         return noise_ngrams
 
-    def mask(self, data: np.ndarray, ngrams: np.ndarray, offset: int, **kwargs) -> Tuple[np.ndarray, np.ndarray]:
+    def mask(self, data: np.ndarray, offset: int, **kwargs) -> Tuple[np.ndarray, np.ndarray]:
         """Mask data with random n-grams.
         Args:
             data: (seq_len, num_features)
@@ -414,6 +447,7 @@ class RandomNgramMasking(InfillingMasking):
         label = data.copy()
         seq_len, _ = data.shape
 
+        ngrams = kwargs[self.extra_data_field_name]
         ngrams = self._process_ngram_spans(ngrams, offset, offset + seq_len)
         noise_ngrams = self._get_random_noise_ngrams(seq_len, ngrams)
         noise_ngram_spans = ngrams[noise_ngrams]
@@ -425,9 +459,7 @@ class RandomNgramMasking(InfillingMasking):
         label[~mask_indices] = self.tokenizer.pad_token_ids
         return data, label
 
-    def mask_for_infilling(
-        self, data: np.ndarray, ngrams: np.ndarray, offset: int, **kwargs
-    ) -> Tuple[np.ndarray, np.ndarray]:
+    def mask_for_infilling(self, data: np.ndarray, offset: int, **kwargs) -> Tuple[np.ndarray, np.ndarray]:
         """Mask data with random n-grams. Put a single mask token for each n-gram.
         Args:
             data: (seq_len, num_features)
@@ -438,6 +470,7 @@ class RandomNgramMasking(InfillingMasking):
             target: (infilling_seq_len, num_features), with form of {<SEP>, tokens, ...}
         """
         seq_len, _ = data.shape
+        ngrams = kwargs[self.extra_data_field_name]
         ngrams = self._process_ngram_spans(ngrams, offset, offset + seq_len)
         noise_ngrams = self._get_random_noise_ngrams(seq_len, ngrams)
         noise_ngram_spans = ngrams[noise_ngrams]
@@ -735,7 +768,16 @@ class MelodyPretrainDataModule(pl.LightningDataModule):
 if __name__ == "__main__":
     # debug
     tokenizer = MIDITokenizer()
-    masking = RandomNgramMasking(tokenizer, corruption_rate=0.5)
+
+    masking = MultiTargetInfillingMasking(
+        (
+            RandomNgramMasking(tokenizer, corruption_rate=0.2, extra_data_field_name="pitch_ngrams"),
+            RandomNgramMasking(tokenizer, corruption_rate=0.2, extra_data_field_name="rhythm_ngrams"),
+            SingleSpanMasking(tokenizer, corruption_rate=0.5),
+        ),
+        probabilities=(0.4, 0.4, 0.2),
+    )
+
     data_collator = DataCollatorForPrefixMaskedLanguageModeling(
         tokenizer=tokenizer,
         masking=masking,
@@ -745,7 +787,7 @@ if __name__ == "__main__":
     data_module = MelodyPretrainDataModule(
         data_dir="experiment/dataset/pretrain_small",
         data_collator=data_collator,
-        batch_size=2,
+        batch_size=5,
         num_workers=0,
         load_ngram_data=True,
     )
