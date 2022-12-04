@@ -7,7 +7,7 @@ import lightning as pl
 import torch
 from torch.utils.data import Dataset, DataLoader
 
-from tokenizer import MIDITokenizer
+from .tokenizer import MIDITokenizer
 
 
 class Masking:
@@ -19,8 +19,8 @@ class Masking:
 
     def __init__(self, tokenizer: MIDITokenizer):
         self.tokenizer = tokenizer
-        self.pad_token_tensor = torch.from_numpy(self.tokenizer.pad_token_ids)
-        self.mask_token_tensor = torch.from_numpy(self.tokenizer.mask_token_ids)
+        self.pad_token_tensor = torch.from_numpy(self.tokenizer.pad_token_ids).long()
+        self.mask_token_tensor = torch.from_numpy(self.tokenizer.mask_token_ids).long()
 
     def _get_length_mask(self, lengths: List[int], seq_len: int) -> torch.Tensor:
         """Get mask for given actual lengths.
@@ -43,7 +43,7 @@ class Masking:
         """
         # (batch, seq_len, num_features, num_tokens)
         batch = batch.unsqueeze(-1)
-        candidates = torch.from_numpy(self.tokenizer.special_token_id_matrix)
+        candidates = torch.from_numpy(self.tokenizer.special_token_id_matrix).long()
         candidates = candidates[None, None, :, :].expand_as(batch)
         # If any of the features matches any of the special tokens, then it is a special token
         special_tokens_mask = (batch == candidates).any(dim=-1)
@@ -571,8 +571,8 @@ class DataCollatorForCausalLanguageModeling(DataCollator):
         data_list, lengths = self.truncate(data_list, self.seq_len + 1, random_crop=self.random_crop)
         data_list = self.pad(data_list)
         batched_data = np.stack(data_list, axis=0)
-        input_ids = torch.from_numpy(batched_data[:, :-1])
-        label_ids = torch.from_numpy(batched_data[:, 1:])
+        input_ids = torch.from_numpy(batched_data[:, :-1]).long()
+        label_ids = torch.from_numpy(batched_data[:, 1:]).long()
 
         # causal attention mask
         batch_size, seq_len = input_ids.shape
@@ -602,11 +602,11 @@ class DataCollatorForMaskedLanguageModeling(DataCollator):
                 masked_data, label = self.masking.mask(data, offset=offset, **extra_data)
                 inputs.append(masked_data)
                 labels.append(label)
-            input_ids = torch.from_numpy(np.stack(self.pad(inputs), axis=0))
-            label_ids = torch.from_numpy(np.stack(self.pad(labels), axis=0))
+            input_ids = torch.from_numpy(np.stack(self.pad(inputs), axis=0)).long()
+            label_ids = torch.from_numpy(np.stack(self.pad(labels), axis=0)).long()
         else:
             # pad, and then mask all data together
-            batch = torch.from_numpy(np.stack(self.pad(data_list), axis=0))
+            batch = torch.from_numpy(np.stack(self.pad(data_list), axis=0)).long()
             input_ids, label_ids = self.masking.mask_batch(batch, lengths)
 
         # bidirectional attention mask
@@ -665,8 +665,8 @@ class DataCollatorForPrefixMaskedLanguageModeling(DataCollator):
             prefix_lengths.append(len(masked_data))
             full_lengths.append(len(input))
         # pad
-        input_ids = torch.from_numpy(np.stack(self.pad(inputs), axis=0))
-        label_ids = torch.from_numpy(np.stack(self.pad(labels), axis=0))
+        input_ids = torch.from_numpy(np.stack(self.pad(inputs), axis=0)).long()
+        label_ids = torch.from_numpy(np.stack(self.pad(labels), axis=0)).long()
 
         batch_size, seq_len, _ = input_ids.shape
         attention_masks = []
@@ -719,15 +719,15 @@ class MelodyDataset(Dataset):
 class MelodyPretrainDataModule(pl.LightningDataModule):
     def __init__(
         self,
-        data_dir: str,
+        dataset_dir: str,
         data_collator: DataCollator,
         batch_size: int,
-        num_workers: int = 8,
+        num_workers: int = 4,
         load_bar_data: bool = False,
         load_ngram_data: bool = False,
     ):
         super().__init__()
-        self.data_dir = data_dir
+        self.dataset_dir = dataset_dir
         self.data_collator = data_collator
         self.batch_size = batch_size
         self.num_workers = num_workers
@@ -735,8 +735,8 @@ class MelodyPretrainDataModule(pl.LightningDataModule):
         self.load_ngram_data = load_ngram_data
 
     def setup(self, stage: str):
-        train_dir = os.path.join(self.data_dir, "train")
-        valid_dir = os.path.join(self.data_dir, "valid")
+        train_dir = os.path.join(self.dataset_dir, "train")
+        valid_dir = os.path.join(self.dataset_dir, "valid")
         self.train_dataset = MelodyDataset(
             train_dir, load_bar_data=self.load_bar_data, load_ngram_data=self.load_ngram_data
         )
@@ -752,16 +752,16 @@ class MelodyPretrainDataModule(pl.LightningDataModule):
             drop_last=True,
             collate_fn=self.data_collator,
             num_workers=self.num_workers,
+            pin_memory=True,
         )
 
     def val_dataloader(self):
         return DataLoader(
             self.valid_dataset,
             batch_size=self.batch_size,
-            shuffle=True,
-            drop_last=True,
             collate_fn=self.data_collator,
             num_workers=self.num_workers,
+            pin_memory=True,
         )
 
 
@@ -785,7 +785,7 @@ if __name__ == "__main__":
         random_crop=True,
     )
     data_module = MelodyPretrainDataModule(
-        data_dir="experiment/dataset/pretrain_small",
+        dataset_dir="experiment/dataset/pretrain_small",
         data_collator=data_collator,
         batch_size=5,
         num_workers=0,

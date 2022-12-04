@@ -1,8 +1,9 @@
+import json
 from math import floor, log2
-from typing import List, Dict, NamedTuple, Union
-from miditoolkit import MidiFile, Instrument, Note
-import numpy as np
+from typing import Dict, List, NamedTuple, Tuple, Union
 
+import numpy as np
+from miditoolkit import Instrument, MidiFile, Note
 
 Field = int
 SpecialTokenField = str
@@ -20,11 +21,11 @@ class MIDICompoundToken(NamedTuple):
 
 
 class MIDITokenizer:
-    def __init__(self, granularity=64, max_bar=128, pitch_range=range(0, 128)) -> None:
+    def __init__(self, granularity=64, max_bar=128, pitch_range: Tuple[int, int] = (0, 128)) -> None:
         self.granularity = granularity
         self.max_bar = max_bar
 
-        self.pitch_range = pitch_range
+        self.pitch_range = range(pitch_range[0], pitch_range[1])
         self.ticks_per_bar = 1920
         self.units_per_bar = granularity
         self.ticks_per_unit = self.ticks_per_bar // self.units_per_bar
@@ -46,7 +47,7 @@ class MIDITokenizer:
         self.vocabularies["bar"] = list(range(max_bar))
         self.vocabularies["position"] = self.position_bins
         self.vocabularies["duration"] = self.duration_bins
-        self.vocabularies["pitch"] = list(pitch_range)
+        self.vocabularies["pitch"] = list(self.pitch_range)
         self.vocab_sizes = [len(self.vocabularies[field_name]) for field_name in self.field_names]
         self.field_sizes = list(self.vocab_sizes)  # will be modified when adding special tokens
 
@@ -65,17 +66,20 @@ class MIDITokenizer:
         self.eos_token_str = "<EOS>"
         self.pad_token_str = "<PAD>"
         self.sep_token_str = "<SEP>"
+        self.cls_token_str = "<CLS>"
         self.mask_token_str = "[MASK]"
         self.bos_token = MIDICompoundToken(*[self.bos_token_str] * len(self.field_names))
         self.eos_token = MIDICompoundToken(*[self.eos_token_str] * len(self.field_names))
         self.pad_token = MIDICompoundToken(*[self.pad_token_str] * len(self.field_names))
         self.sep_token = MIDICompoundToken(*[self.sep_token_str] * len(self.field_names))
+        self.cls_token = MIDICompoundToken(*[self.cls_token_str] * len(self.field_names))
         self.mask_token = MIDICompoundToken(*[self.mask_token_str] * len(self.field_names))
         self.special_token_str = [
             self.bos_token_str,
             self.eos_token_str,
             self.pad_token_str,
             self.sep_token_str,
+            self.cls_token_str,
             self.mask_token_str,
         ]
 
@@ -90,9 +94,17 @@ class MIDITokenizer:
         self.eos_token_ids = self.convert_tokens_to_ids([self.eos_token])[0]
         self.pad_token_ids = self.convert_tokens_to_ids([self.pad_token])[0]
         self.sep_token_ids = self.convert_tokens_to_ids([self.sep_token])[0]
+        self.cls_token_ids = self.convert_tokens_to_ids([self.cls_token])[0]
         self.mask_token_ids = self.convert_tokens_to_ids([self.mask_token])[0]
         self.special_token_id_matrix = np.array(
-            [self.bos_token_ids, self.eos_token_ids, self.pad_token_ids, self.sep_token_ids, self.mask_token_ids]
+            [
+                self.bos_token_ids,
+                self.eos_token_ids,
+                self.pad_token_ids,
+                self.sep_token_ids,
+                self.cls_token_ids,
+                self.mask_token_ids,
+            ]
         ).T  # (num_features, num_tokens)
 
     def tokenize(self, midi: MidiFile) -> List[MIDICompoundToken]:
@@ -193,10 +205,20 @@ class MIDITokenizer:
         token_size_str = ", ".join([f"{field_name}={len(d)}" for field_name, d in self.encoder.items()])
         return info_str + "\n" + token_size_str
 
+    @staticmethod
+    def from_config(path: str) -> "MIDITokenizer":
+        with open(path) as f:
+            config = json.load(f)
+        return MIDITokenizer(**config)
+
 
 if __name__ == "__main__":
     tokenizer = MIDITokenizer()
-    print(tokenizer.encoder)
+    print("field_names:", tokenizer.field_names)
+    print("field_indices:", tokenizer.field_indices)
+    print("field_sizes:", tokenizer.field_sizes)
+    print("vocab_sizes:", tokenizer.vocab_sizes)
+    print("encoder:", tokenizer.encoder)
     tokens = tokenizer.encode("data/test.mid")
     print(tokens)
     midi = tokenizer.decode(tokens)

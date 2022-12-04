@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 from glob import glob
 from multiprocessing import Pool
@@ -45,6 +46,14 @@ if __name__ == "__main__":
     parser.add_argument("--max_bar", type=int, default=128)
     parser.add_argument("--pitch_range", type=int, nargs=2, default=(0, 128))
     args = parser.parse_args()
-    args.pitch_range = range(*args.pitch_range)
+
+    # save tokenizer config
+    json_path = os.path.join(args.dataset_dir, "tokenizer_config.json")
+    with open(json_path, "w") as f:
+        json.dump({
+            "granularity": args.granularity,
+            "max_bar": args.max_bar,
+            "pitch_range": args.pitch_range,
+        }, f, indent=4)
 
     prepare_data(**vars(args))
