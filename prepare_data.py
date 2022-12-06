@@ -5,11 +5,11 @@ from glob import glob
 from multiprocessing import Pool
 
 import numpy as np
-from tqdm import tqdm
 from miditoolkit import MidiFile
+from tqdm import tqdm
 
-from melody_pretrain.dataset.tokenizer import MIDITokenizer
-from melody_pretrain.dataset.ngram import get_ngram_labels
+from melody_pretrain.ngram import get_ngram_labels
+from melody_pretrain.tokenizer import MIDITokenizer
 
 
 def prepare_data_job(midi_file: str, dest_path: str, tokenizer: MIDITokenizer, lexicon_path: str):

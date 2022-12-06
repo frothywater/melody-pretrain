@@ -6,8 +6,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .dataset.data_module import DatasetBatch
-from .dataset.tokenizer import MIDITokenizer
+from .dataset import DatasetBatch
+from .tokenizer import MIDITokenizer
 
 
 class CompoundTokenFuser(nn.Module):
@@ -186,7 +186,7 @@ class MelodyPretrainModel(pl.LightningModule):
         loss = self.get_loss(logits, batch.label_ids)
         self.log("val_loss", loss, sync_dist=True)
         return loss
-    
+
     def test_step(self, batch: DatasetBatch, batch_idx: int) -> torch.Tensor:
         logits = self.step(batch)
         loss = self.get_loss(logits, batch.label_ids)

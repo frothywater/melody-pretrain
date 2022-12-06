@@ -1,7 +1,7 @@
 import argparse
 import os
 
-from melody_pretrain.dataset.ngram import extract, prepare_lexicon, render_midi
+from melody_pretrain.ngram import extract, prepare_lexicon, render_midi
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

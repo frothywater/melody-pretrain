@@ -6,9 +6,9 @@ from lightning.lite.utilities.seed import seed_everything
 from lightning.pytorch.callbacks import EarlyStopping, LearningRateMonitor, StochasticWeightAveraging
 from lightning.pytorch.strategies import DDPStrategy
 
-from melody_pretrain.dataset.data_module import DataCollatorForCausalLanguageModeling, MelodyPretrainDataModule
-from melody_pretrain.dataset.tokenizer import MIDITokenizer
+from melody_pretrain.dataset import DataCollatorForCausalLanguageModeling, MelodyPretrainDataModule
 from melody_pretrain.model import MelodyPretrainModel
+from melody_pretrain.tokenizer import MIDITokenizer
 
 
 def main():
@@ -58,9 +58,7 @@ def main():
     # model
     if args.checkpoint_path is not None:
         print(f"Load checkpoint from {args.checkpoint_path}")
-        model = MelodyPretrainModel.load_from_checkpoint(
-            tokenizer=tokenizer, total_steps=total_steps, **vars(args)
-        )
+        model = MelodyPretrainModel.load_from_checkpoint(tokenizer=tokenizer, total_steps=total_steps, **vars(args))
     else:
         print("Train from scratch.")
         model = MelodyPretrainModel(tokenizer=tokenizer, total_steps=total_steps, **vars(args))

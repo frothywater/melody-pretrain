@@ -6,15 +6,15 @@ from lightning.lite.utilities.seed import seed_everything
 from lightning.pytorch.callbacks import EarlyStopping, LearningRateMonitor, StochasticWeightAveraging
 from lightning.pytorch.strategies import DDPStrategy
 
-from melody_pretrain.dataset.data_module import (
+from melody_pretrain.dataset import (
     DataCollatorForPrefixMaskedLanguageModeling,
     MelodyPretrainDataModule,
     MultiTargetInfillingMasking,
     RandomNgramMasking,
     SingleSpanMasking,
 )
-from melody_pretrain.dataset.tokenizer import MIDITokenizer
 from melody_pretrain.model import MelodyPretrainModel
+from melody_pretrain.tokenizer import MIDITokenizer
 
 
 def main():
