@@ -16,8 +16,9 @@ class Masking:
     # if not, the strategy will perform masking on the whole batch.
     # For text infilling, masking is always performed on each sequence separately.
     need_to_mask_per_data: bool = False
+    tokenizer: MIDITokenizer
 
-    def __init__(self, tokenizer: MIDITokenizer):
+    def setup_tokenizer(self, tokenizer: MIDITokenizer):
         self.tokenizer = tokenizer
         self.pad_token_tensor = torch.from_numpy(self.tokenizer.pad_token_ids).long()
         self.mask_token_tensor = torch.from_numpy(self.tokenizer.mask_token_ids).long()
@@ -99,9 +100,6 @@ class Masking:
 
 
 class InfillingMasking(Masking):
-    def __init__(self, tokenizer: MIDITokenizer):
-        super().__init__(tokenizer)
-
     def mask_for_infilling(self, data: np.ndarray, **kwargs) -> Tuple[np.ndarray, np.ndarray]:
         raise NotImplementedError
 
@@ -115,6 +113,10 @@ class MultiTargetInfillingMasking(InfillingMasking):
         self.probabilities = probabilities
         self.need_to_mask_per_data = any(masking.need_to_mask_per_data for masking in maskings)
 
+    def setup_tokenizer(self, tokenizer: MIDITokenizer):
+        for masking in self.maskings:
+            masking.setup_tokenizer(tokenizer)
+
     def mask(self, data: np.ndarray, **kwargs) -> Tuple[np.ndarray, np.ndarray]:
         index = np.random.choice(len(self.maskings), p=self.probabilities)
         masking = self.maskings[index]
@@ -127,8 +129,8 @@ class MultiTargetInfillingMasking(InfillingMasking):
 
 
 class RandomTokenMasking(Masking):
-    def __init__(self, tokenizer: MIDITokenizer, corruption_rate: float = 0.15):
-        super().__init__(tokenizer)
+    def __init__(self, corruption_rate: float = 0.15):
+        super().__init__()
         self.corruption_rate = corruption_rate
 
     def mask_batch(self, inputs: torch.Tensor, lengths: List[int]) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -169,8 +171,8 @@ class RandomTokenMasking(Masking):
 
 
 class SingleSpanMasking(InfillingMasking):
-    def __init__(self, tokenizer: MIDITokenizer, corruption_rate: float = 0.5):
-        super().__init__(tokenizer)
+    def __init__(self, corruption_rate: float = 0.5):
+        super().__init__()
         self.corruption_rate = corruption_rate
 
     def _get_random_span(self, length: int):
@@ -208,8 +210,8 @@ class SingleSpanMasking(InfillingMasking):
 
 
 class RandomSpanMasking(InfillingMasking):
-    def __init__(self, tokenizer: MIDITokenizer, corruption_rate: float = 0.15, mean_span_length: int = 3):
-        super().__init__(tokenizer)
+    def __init__(self, corruption_rate: float = 0.15, mean_span_length: int = 3):
+        super().__init__()
         self.corruption_rate = corruption_rate
         self.mean_span_length = mean_span_length
 
@@ -297,14 +299,15 @@ class RandomSpanMasking(InfillingMasking):
 class RandomBarMasking(InfillingMasking):
     need_to_mask_per_data = True
 
-    def __init__(
-        self, tokenizer: MIDITokenizer, corruption_rate: float = 0.15, extra_data_field_name: str = "bar_spans"
-    ):
-        super().__init__(tokenizer)
+    def __init__(self, corruption_rate: float = 0.15, extra_data_field_name: str = "bar_spans"):
+        super().__init__()
         self.corruption_rate = corruption_rate
+        self.extra_data_field_name = extra_data_field_name
+
+    def setup_tokenizer(self, tokenizer: MIDITokenizer):
+        super().setup_tokenizer(tokenizer)
         self.bar_field_index = tokenizer.field_names.index("bar")
         self.bar_vocab_size = tokenizer.vocab_sizes[self.bar_field_index]
-        self.extra_data_field_name = extra_data_field_name
 
     def _process_bar_spans(self, bar_spans: np.ndarray, start: int, end: int) -> np.ndarray:
         """Pick bar spans within given range and shift them to start from 0."""
@@ -387,8 +390,8 @@ class RandomBarMasking(InfillingMasking):
 class RandomNgramMasking(InfillingMasking):
     need_to_mask_per_data = True
 
-    def __init__(self, tokenizer: MIDITokenizer, corruption_rate: float = 0.15, extra_data_field_name: str = "ngrams"):
-        super().__init__(tokenizer)
+    def __init__(self, corruption_rate: float = 0.15, extra_data_field_name: str = "ngrams"):
+        super().__init__()
         self.corruption_rate = corruption_rate
         self.extra_data_field_name = extra_data_field_name
 
@@ -491,10 +494,13 @@ class RandomNgramMasking(InfillingMasking):
 
 
 class DataCollator:
-    def __init__(self, tokenizer: MIDITokenizer, seq_len: int, random_crop: bool = False):
-        self.tokenizer = tokenizer
+    def __init__(self, seq_len: int, random_crop: bool = False):
+        self.tokenizer: MIDITokenizer
         self.seq_len = seq_len
         self.random_crop = random_crop
+
+    def setup_tokenizer(self, tokenizer: MIDITokenizer):
+        self.tokenizer = tokenizer
 
     def truncate(
         self, batch: List[np.ndarray], max_length: int, random_crop: bool = False
@@ -563,9 +569,9 @@ class DatasetBatch(NamedTuple):
 
 class DataCollatorForCausalLanguageModeling(DataCollator):
     def __init__(
-        self, tokenizer: MIDITokenizer, seq_len: int, random_crop: bool = False, add_trailing_mask: bool = False
+        self, seq_len: int, random_crop: bool = False, add_trailing_mask: bool = False
     ):
-        super().__init__(tokenizer, seq_len, random_crop)
+        super().__init__(seq_len, random_crop)
         self.add_trailing_mask = add_trailing_mask
 
     def __call__(self, batch: List[DatasetItem]) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -593,9 +599,13 @@ class DataCollatorForCausalLanguageModeling(DataCollator):
 
 
 class DataCollatorForMaskedLanguageModeling(DataCollator):
-    def __init__(self, tokenizer: MIDITokenizer, masking: Masking, seq_len: int, random_crop: bool = False):
-        super().__init__(tokenizer, seq_len, random_crop)
+    def __init__(self, masking: Masking, seq_len: int, random_crop: bool = False):
+        super().__init__(seq_len, random_crop)
         self.masking = masking
+
+    def setup_tokenizer(self, tokenizer: MIDITokenizer):
+        super().setup_tokenizer(tokenizer)
+        self.masking.setup_tokenizer(tokenizer)
 
     def __call__(self, batch: List[DatasetItem]) -> Tuple[torch.Tensor, torch.Tensor]:
         data_list = [item.data for item in batch]
@@ -628,9 +638,13 @@ class DataCollatorForMaskedLanguageModeling(DataCollator):
 
 
 class DataCollatorForPrefixMaskedLanguageModeling(DataCollator):
-    def __init__(self, tokenizer: MIDITokenizer, masking: InfillingMasking, seq_len: int, random_crop: bool = False):
-        super().__init__(tokenizer, seq_len, random_crop)
+    def __init__(self, masking: InfillingMasking, seq_len: int, random_crop: bool = False):
+        super().__init__(seq_len, random_crop)
         self.masking = masking
+
+    def setup_tokenizer(self, tokenizer: MIDITokenizer):
+        super().setup_tokenizer(tokenizer)
+        self.masking.setup_tokenizer(tokenizer)
 
     def _get_input_and_label(self, masked_data: np.ndarray, target: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """Get input and label for infilling.
@@ -737,7 +751,14 @@ class MelodyPretrainDataModule(pl.LightningDataModule):
     ):
         super().__init__()
         self.dataset_dir = dataset_dir
+        tokenizer_config_path = os.path.join(dataset_dir, "tokenizer_config.json")
+        if not os.path.exists(tokenizer_config_path):
+            raise ValueError(f"Tokenizer config file not found: {tokenizer_config_path}")
+        self.tokenizer = MIDITokenizer.from_config(tokenizer_config_path)
+
         self.data_collator = data_collator
+        self.data_collator.setup_tokenizer(self.tokenizer)
+
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.load_bar_data = load_bar_data

@@ -1,0 +1,165 @@
+# lightning.pytorch==1.8.3.post1
+seed_everything: 42
+trainer:
+  logger: true
+  enable_checkpointing: true
+  callbacks:
+  - class_path: lightning.pytorch.callbacks.EarlyStopping
+    init_args:
+      monitor: val_loss
+      min_delta: 0.0
+      patience: 10
+      verbose: false
+      mode: min
+      strict: true
+      check_finite: true
+      stopping_threshold: null
+      divergence_threshold: null
+      check_on_train_epoch_end: null
+      log_rank_zero_only: false
+  - class_path: lightning.pytorch.callbacks.StochasticWeightAveraging
+    init_args:
+      swa_lrs: 0.01
+      swa_epoch_start: 0.8
+      annealing_epochs: 10
+      annealing_strategy: cos
+      avg_fn: null
+      device: cpu
+  - class_path: lightning.pytorch.callbacks.LearningRateMonitor
+    init_args:
+      logging_interval: step
+      log_momentum: false
+  default_root_dir: experiment/model/pretrain_small
+  gradient_clip_val: 1.0
+  gradient_clip_algorithm: null
+  num_nodes: 1
+  num_processes: null
+  devices: -1
+  gpus: null
+  auto_select_gpus: false
+  tpu_cores: null
+  ipus: null
+  enable_progress_bar: true
+  overfit_batches: 0.0
+  track_grad_norm: -1
+  check_val_every_n_epoch: 1
+  fast_dev_run: false
+  accumulate_grad_batches: null
+  max_epochs: 200
+  min_epochs: null
+  max_steps: -1
+  min_steps: null
+  max_time: null
+  limit_train_batches: null
+  limit_val_batches: null
+  limit_test_batches: null
+  limit_predict_batches: null
+  val_check_interval: null
+  log_every_n_steps: 1
+  accelerator: gpu
+  strategy:
+    class_path: lightning.pytorch.strategies.DDPStrategy
+    init_args:
+      parallel_devices: null
+      cluster_environment: null
+      checkpoint_io: null
+      precision_plugin: null
+      ddp_comm_state: null
+      ddp_comm_hook: null
+      ddp_comm_wrapper: null
+      model_averaging_period: null
+      process_group_backend: null
+      timeout: 0:30:00
+      output_device: null
+      dim: 0
+      broadcast_buffers: true
+      process_group: null
+      bucket_cap_mb: 25
+      find_unused_parameters: false
+      check_reduction: false
+      gradient_as_bucket_view: false
+      static_graph: false
+  sync_batchnorm: false
+  precision: 16
+  enable_model_summary: true
+  num_sanity_val_steps: 2
+  resume_from_checkpoint: null
+  profiler: null
+  benchmark: null
+  deterministic: null
+  reload_dataloaders_every_n_epochs: 0
+  auto_lr_find: false
+  replace_sampler_ddp: true
+  detect_anomaly: false
+  auto_scale_batch_size: false
+  plugins: null
+  amp_backend: native
+  amp_level: null
+  move_metrics_to_cpu: false
+  multiple_trainloader_mode: max_size_cycle
+  inference_mode: true
+model:
+  tokenizer:
+    class_path: melody_pretrain.tokenizer.MIDITokenizer
+    init_args:
+      granularity: 64
+      max_bar: 128
+      pitch_range:
+      - 0
+      - 128
+  embedding_dim:
+  - 32
+  - 256
+  - 256
+  - 512
+  model_dim: 512
+  feedforward_dim: 2048
+  num_layers: 6
+  num_heads: 8
+  dropout: 0.1
+  lr: 0.0001
+  betas:
+  - 0.9
+  - 0.999
+  weight_decay: 0.01
+  total_steps: 10000
+  warmup_percent: 0.3
+data:
+  dataset_dir: experiment/dataset/pretrain_small
+  tokenizer:
+    class_path: melody_pretrain.tokenizer.MIDITokenizer
+    init_args:
+      granularity: 64
+      max_bar: 128
+      pitch_range:
+      - 0
+      - 128
+  data_collator:
+    class_path: melody_pretrain.dataset.DataCollatorForPrefixMaskedLanguageModeling
+    init_args:
+      masking:
+        class_path: melody_pretrain.dataset.MultiTargetInfillingMasking
+        init_args:
+          maskings:
+          - class_path: melody_pretrain.dataset.RandomNgramMasking
+            init_args:
+              corruption_rate: 0.2
+              extra_data_field_name: pitch_ngrams
+          - class_path: melody_pretrain.dataset.RandomNgramMasking
+            init_args:
+              corruption_rate: 0.2
+              extra_data_field_name: rhythm_ngrams
+          - class_path: melody_pretrain.dataset.SingleSpanMasking
+            init_args:
+              corruption_rate: 0.5
+          probabilities:
+          - 0.4
+          - 0.4
+          - 0.2
+      seq_len: 512
+      random_crop: true
+  batch_size: 16
+  num_workers: 4
+  load_bar_data: false
+  load_ngram_data: true
+ckpt_path: null

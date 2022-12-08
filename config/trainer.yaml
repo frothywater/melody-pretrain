@@ -1,0 +1,47 @@
+# lightning.pytorch==1.8.3.post1
+seed_everything: 42
+trainer:
+  callbacks:
+    - class_path: EarlyStopping
+      init_args:
+        monitor: val_loss
+        patience: 30
+        min_delta: 0
+    - class_path: StochasticWeightAveraging
+      init_args:
+        swa_lrs: 1e-2
+    - class_path: LearningRateMonitor
+      init_args:
+        logging_interval: step
+  gradient_clip_val: 1.0
+  devices: 2
+  max_steps: 50000
+  log_every_n_steps: 1
+  accelerator: gpu
+  strategy:
+    class_path: DDPStrategy
+    init_args:
+      find_unused_parameters: false
+      static_graph: true
+      gradient_as_bucket_view: true
+      ddp_comm_hook: torch.distributed.algorithms.ddp_comm_hooks.default_hooks.fp16_compress_hook
+  precision: 16
+  accumulate_grad_batches: null
+data:
+  batch_size: 8
+  num_workers: 2
+
+# debug
+# trainer:
+#   fast_dev_run: 100
+#   profiler:
+#     class_path: PyTorchProfiler
+#     init_args:
+#       filename: profile_result
+#       group_by_input_shapes: true
+#       record_module_names: true
+#       sort_by_key: cuda_memory_usage
+#       row_limit: -1
+#     dict_kwargs:
+#       profile_memory: true
+#       record_shapes: true

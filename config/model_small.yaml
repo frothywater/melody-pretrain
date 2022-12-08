@@ -1,0 +1,12 @@
+# lightning.pytorch==1.8.3.post1
+model:
+  embedding_dim: [32, 256, 256, 512]
+  model_dim: 512
+  feedforward_dim: 2048
+  num_layers: 8
+  num_heads: 8
+  dropout: 0.1
+  lr: 4e-4
+  betas: [0.9, 0.98]
+  weight_decay: 0.01
+  warmup_percent: 0.1

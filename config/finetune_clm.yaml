@@ -1,0 +1,14 @@
+# lightning.pytorch==1.8.3.post1
+trainer:
+  default_root_dir: experiment/model/finetune_clm
+model:
+  dataset_dir: experiment/dataset/wikifonia
+data:
+  dataset_dir: experiment/dataset/wikifonia
+  data_collator:
+    class_path: DataCollatorForCausalLanguageModeling
+    init_args:
+      seq_len: 512
+      random_crop: true
+  batch_size: 16
+  num_workers: 4
