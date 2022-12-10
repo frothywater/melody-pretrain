@@ -19,13 +19,29 @@
     ```
 3. Pretrain.
     ```bash
-    python main.py fit --config config/trainer.yaml \
-    --config config/model_small.yaml --config config/pretrain_prefix_multi_target.yaml
+    python main.py fit --config config/trainer.yaml --config config/model_small.yaml --config config/pretrain_span.yaml --trainer.devices "0,"
+    python main.py fit --config config/trainer.yaml --config config/model_small.yaml --config config/pretrain_bar.yaml --trainer.devices "1,"
+    python main.py fit --config config/trainer.yaml --config config/model_small.yaml --config config/pretrain_ngram.yaml --trainer.devices "2,"
+    python main.py fit --config config/trainer.yaml --config config/model_small.yaml --config config/pretrain_ngram_multi.yaml --trainer.devices "3,"
     ```
 4. Finetune.
     ```bash
-    python main.py fit --config config/trainer.yaml \
-    --config config/model_small.yaml --config config/finetune_clm.yaml
+    python main.py fit --config config/trainer.yaml --config config/model_small.yaml --config config/finetune_clm.yaml --trainer.default_root_dir experiment/model/finetune_clm_bar --load_from_checkpoint experiment/model/pretrain_bar/lightning_logs/version_0/checkpoints/epoch=105-step=8798.ckpt --trainer.devices "0,"
+    python main.py fit --config config/trainer.yaml --config config/model_small.yaml --config config/finetune_clm.yaml --trainer.default_root_dir experiment/model/finetune_clm_ngram --load_from_checkpoint experiment/model/pretrain_span/lightning_logs/version_0/checkpoints/epoch=169-step=14110.ckpt --trainer.devices "1,"
+    python main.py fit --config config/trainer.yaml --config config/model_small.yaml --config config/finetune_clm.yaml --trainer.default_root_dir experiment/model/finetune_clm_ngram --load_from_checkpoint experiment/model/pretrain_ngram/lightning_logs/version_1/checkpoints/epoch=87-step=7304.ckpt --trainer.devices "2,"
+    python main.py fit --config config/trainer.yaml --config config/model_small.yaml --config config/finetune_clm.yaml --trainer.default_root_dir experiment/model/finetune_clm_ngram_multi --load_from_checkpoint experiment/model/pretrain_ngram_multi/lightning_logs/version_0/checkpoints/epoch=128-step=10707.ckpt --trainer.devices "3,"
+    ```
+5. Train from scratch (for comparison).
+    ```bash
+    python main.py fit --config config/trainer.yaml --config config/model_small.yaml --config config/from_scratch_clm.yaml --trainer.devices "4,"
+    ```
+6. Test.
+    ```bash
+    python main.py test --config config/trainer.yaml --config config/model_small.yaml --config config/finetune_clm.yaml --trainer.default_root_dir experiment/model/finetune_clm_bar --ckpt_path experiment/model/finetune_clm_bar/lightning_logs/version_0/checkpoints/epoch=18-step=950.ckpt --trainer.devices "0,"
+    python main.py test --config config/trainer.yaml --config config/model_small.yaml --config config/finetune_clm.yaml --trainer.default_root_dir experiment/model/finetune_clm_span --ckpt_path experiment/model/finetune_clm_span/lightning_logs/version_0/checkpoints/epoch=16-step=850.ckpt --trainer.devices "1,"
+    python main.py test --config config/trainer.yaml --config config/model_small.yaml --config config/finetune_clm.yaml --trainer.default_root_dir experiment/model/finetune_clm_ngram --ckpt_path experiment/model/finetune_clm_ngram/lightning_logs/version_0/checkpoints/epoch=18-step=950.ckpt --trainer.devices "2,"
+    python main.py test --config config/trainer.yaml --config config/model_small.yaml --config config/finetune_clm.yaml --trainer.default_root_dir experiment/model/finetune_clm_ngram_multi --ckpt_path experiment/model/finetune_clm_ngram_multi/lightning_logs/version_0/checkpoints/epoch=16-step=850.ckpt --trainer.devices "3,"
+    python main.py test --config config/trainer.yaml --config config/model_small.yaml --config config/from_scratch_clm.yaml --trainer.default_root_dir experiment/model/from_scratch_clm --ckpt_path experiment/model/from_scratch_clm/lightning_logs/version_0/checkpoints/epoch=31-step=1600.ckpt --trainer.devices "4,"
     ```
 
 ## Dependencies

@@ -1,0 +1,28 @@
+# lightning.pytorch==1.8.3.post1
+seed_everything: 42
+trainer:
+  default_root_dir: experiment/model/from_scratch_clm
+  callbacks:
+    - class_path: CustomWriter
+      init_args:
+        output_dir: experiment/output_from_scratch
+  logger: false
+  enable_checkpointing: false
+  devices: 1
+  accelerator: gpu
+  precision: 16
+  strategy: ddp
+model:
+  dataset_dir: experiment/dataset/wikifonia
+  conditional_bar_length: 4
+  prediction_bar_length: 32
+  temperature: 0.9
+  top_k: 10
+data:
+  dataset_dir: experiment/dataset/wikifonia
+  batch_size: 1
+  num_workers: 4
+  data_collator:
+    class_path: DataCollatorForPaddingOnly
+    init_args:
+      seq_len: 512

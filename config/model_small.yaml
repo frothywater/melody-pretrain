@@ -3,7 +3,7 @@ model:
   embedding_dim: [32, 256, 256, 512]
   model_dim: 512
   feedforward_dim: 2048
-  num_layers: 8
+  num_layers: 12
   num_heads: 8
   dropout: 0.1
   lr: 4e-4

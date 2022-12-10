@@ -5,7 +5,7 @@ trainer:
     - class_path: EarlyStopping
       init_args:
         monitor: val_loss
-        patience: 30
+        patience: 10
         min_delta: 0
     - class_path: StochasticWeightAveraging
       init_args:
@@ -13,23 +13,26 @@ trainer:
     - class_path: LearningRateMonitor
       init_args:
         logging_interval: step
+    - class_path: ModelCheckpoint
+      init_args:
+        save_top_k: 3
+        monitor: val_loss
+        mode: min
+        filename: epoch={epoch:02d}-val={val_loss:.3f}
   gradient_clip_val: 1.0
-  devices: 2
-  max_steps: 50000
+  devices: 1
+  max_steps: 20000
   log_every_n_steps: 1
   accelerator: gpu
   strategy:
     class_path: DDPStrategy
     init_args:
       find_unused_parameters: false
-      static_graph: true
-      gradient_as_bucket_view: true
-      ddp_comm_hook: torch.distributed.algorithms.ddp_comm_hooks.default_hooks.fp16_compress_hook
   precision: 16
-  accumulate_grad_batches: null
+  accumulate_grad_batches: 4
 data:
-  batch_size: 8
-  num_workers: 2
+  batch_size: 16
+  num_workers: 4
 
 # debug
 # trainer:
