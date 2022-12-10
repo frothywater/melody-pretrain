@@ -118,6 +118,12 @@ class MIDITokenizer:
             tokens.append(MIDICompoundToken(bar, position, duration, note.pitch))
         return tokens
 
+    def convert_token_to_id(self, token: MIDICompoundToken) -> np.ndarray:
+        return self.convert_tokens_to_ids([token])[0]
+    
+    def convert_id_to_token(self, token: np.ndarray) -> MIDICompoundToken:
+        return self.convert_ids_to_tokens(np.expand_dims(token, axis=0))[0]
+
     def convert_tokens_to_ids(self, tokens: List[MIDICompoundToken]) -> np.ndarray:
         token_ids = np.zeros((len(tokens), len(self.field_names)), dtype=np.int16)
         for index, token in enumerate(tokens):

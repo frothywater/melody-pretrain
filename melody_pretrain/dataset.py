@@ -562,9 +562,26 @@ class DatasetBatch(NamedTuple):
     """Note that in PyTorch's padding mask and attention mask, True means to ignore."""
 
     input_ids: torch.Tensor
-    label_ids: torch.Tensor
+    label_ids: Optional[torch.Tensor]
     padding_mask: torch.Tensor
     attention_mask: Optional[torch.Tensor]
+
+
+class DataCollatorForPaddingOnly(DataCollator):
+    def __init__(self, seq_len: int):
+        super().__init__(seq_len)
+
+    def __call__(self, batch: List[DatasetItem]) -> DatasetBatch:
+        data_list = [item.data for item in batch]
+        data_list, _ = self.truncate(data_list, self.seq_len)
+        data_list = self.pad(data_list, self.seq_len)
+        input_ids = np.stack(data_list, axis=0)
+        input_ids = torch.tensor(input_ids, dtype=torch.long)
+        padding_mask = torch.tensor([[0] * len(data) + [1] * (self.seq_len - len(data)) for data in data_list], dtype=torch.bool)
+        label_ids = None
+        attention_mask = None
+
+        return DatasetBatch(input_ids, label_ids, padding_mask, attention_mask)
 
 
 class DataCollatorForCausalLanguageModeling(DataCollator):
@@ -803,7 +820,17 @@ class MelodyPretrainDataModule(pl.LightningDataModule):
     def test_dataloader(self):
         return DataLoader(
             self.test_dataset,
-            batch_size=self.batch_size,
+            batch_size=1,
+            collate_fn=self.data_collator,
+            num_workers=self.num_workers,
+            pin_memory=True,
+        )
+    
+    def predict_dataloader(self):
+        # batch_size=1 for prediction currently
+        return DataLoader(
+            self.test_dataset,
+            batch_size=1,
             collate_fn=self.data_collator,
             num_workers=self.num_workers,
             pin_memory=True,

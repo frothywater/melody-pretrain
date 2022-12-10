@@ -1,7 +1,8 @@
 import os
-from typing import List, Optional, Tuple, Union
+from typing import List, Optional, Sequence, Tuple, Union
 
 import lightning as pl
+from lightning.pytorch.callbacks import BasePredictionWriter
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -69,17 +70,23 @@ class MelodyPretrainModel(pl.LightningModule):
         self,
         # Instantiate the tokenizer using config file in the dataset directory
         dataset_dir: str,
-        # embedding_dim: (bar, position, duration, pitch)
-        embedding_dim: Union[int, Tuple[int, ...]],
+        # Model hyperparameters
+        embedding_dim: Union[int, Tuple[int, ...]],  # embedding_dim: (bar, position, duration, pitch)
         model_dim: int,
         feedforward_dim: int,
         num_layers: int,
         num_heads: int,
         dropout: float,
+        # Optimizer hyperparameters
         lr: float,
         betas: Tuple[float, float],
         weight_decay: float,
         warmup_percent: float,
+        # Inference hyperparameters
+        conditional_bar_length: Optional[int] = None,
+        prediction_bar_length: Optional[int] = None,
+        temperature: Optional[float] = None,
+        top_k: Optional[int] = None,
         **kwargs,
     ) -> None:
         super().__init__()
@@ -91,11 +98,17 @@ class MelodyPretrainModel(pl.LightningModule):
 
         self.num_features = len(self.tokenizer.field_names)
 
+        self.num_heads = num_heads
+
         self.lr = lr
         self.betas = betas
         self.weight_decay = weight_decay
         self.warmup_percent = warmup_percent
-        self.num_heads = num_heads
+
+        self.conditional_bar_length = conditional_bar_length
+        self.prediction_bar_length = prediction_bar_length
+        self.temperature = temperature
+        self.top_k = top_k
 
         self.fuser = CompoundTokenFuser(self.tokenizer, embedding_dim, model_dim)
         self.transformer_encoder = nn.TransformerEncoder(
@@ -122,10 +135,12 @@ class MelodyPretrainModel(pl.LightningModule):
         scheduler = {"scheduler": lr_scheduler, "interval": "step"}
         return [optimizer], [scheduler]
 
-    def forward(self, x: torch.Tensor, padding_mask: torch.Tensor, attn_mask: Optional[torch.Tensor]) -> torch.Tensor:
+    def forward(
+        self, x: torch.Tensor, padding_mask: Optional[torch.Tensor] = None, attn_mask: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
         """Args:
             x: (batch_size, seq_len, num_features)
-            padding_mask: (batch_size, seq_len)
+            padding_mask: (batch_size, seq_len), optional
             attn_mask: (batch_size, seq_len, seq_len), optional
         Returns:
             x: list of num_features * (batch_size, seq_len, vocab_size of the feature)
@@ -181,3 +196,80 @@ class MelodyPretrainModel(pl.LightningModule):
         loss = self._get_loss(logits, batch.label_ids)
         self.log("test_loss", loss, sync_dist=True)
         return loss
+
+    def top_k_sample(self, logits: torch.Tensor, k: int, t: float = 1.0) -> torch.Tensor:
+        """Sample from the top k logits with temperature t"""
+        assert k > 0, "k must be greater than 0"
+        assert t > 0, "t must be greater than 0"
+        logits = logits / t
+        top_k_logits, top_k_indices = torch.topk(logits, k)
+        top_k_probs = F.softmax(top_k_logits, dim=-1)
+        sampled_index = torch.multinomial(top_k_probs, 1)
+        sampled_token = top_k_indices.gather(0, sampled_index)
+        return sampled_token
+
+    def predict_step(self, batch: DatasetBatch, batch_idx: int, dataloader_idx: int = 0) -> torch.Tensor:
+        assert self.conditional_bar_length is not None, "conditional_bar_length must be set for prediction"
+        assert self.prediction_bar_length is not None, "prediction_bar_length must be set for prediction"
+        assert self.temperature is not None, "temperature must be set for prediction"
+        assert self.top_k is not None, "top_k must be set for prediction"
+
+        input_ids, _, padding_mask, attention_mask = batch
+        batch_size, _, _ = input_ids.shape
+        assert batch_size == 1, "Only support batch size of 1 for prediction for now"
+
+        # Crop the input to the conditional bar length
+        bar_field_index = self.tokenizer.field_indices["bar"]
+        conditional_bar_token_id = self.tokenizer.encoder["bar"][self.conditional_bar_length]
+        prediction_bar_token_id = self.tokenizer.encoder["bar"][self.prediction_bar_length]
+
+        conditional_bar_test = (input_ids[0, :, bar_field_index] == conditional_bar_token_id).nonzero()
+        assert conditional_bar_test.shape[1] >= 1, "No conditional bar token found in the input"
+        conditional_bar_index = conditional_bar_test[0, 0].item()
+        input_ids = input_ids[:, :conditional_bar_index, :]
+
+        # Inference on a single sequence
+        while True:
+            seq_len = input_ids.shape[1]
+            attention_mask = torch.triu(torch.ones((seq_len, seq_len), dtype=torch.bool), diagonal=1).to(input_ids.device)
+            logits = self(input_ids, attn_mask=attention_mask)
+            sampled_tokens = []
+            for logit in logits:
+                # Decode according to the sampling strategy
+                sampled_token = self.top_k_sample(logit[0, -1, :], k=self.top_k, t=self.temperature)
+                sampled_tokens.append(sampled_token)
+            sampled_tokens = torch.cat(sampled_tokens, dim=-1)
+
+            token = self.tokenizer.convert_id_to_token(sampled_tokens.cpu().numpy())
+            print(token)
+
+            # until the desired bar length is reached
+            if sampled_tokens[bar_field_index] == prediction_bar_token_id:
+                break
+
+            # Append the sampled token to the input
+            input_ids = torch.cat([input_ids, sampled_tokens.unsqueeze(0).unsqueeze(0)], dim=1)
+
+        return input_ids
+
+
+class CustomWriter(BasePredictionWriter):
+    def __init__(self, output_dir: str):
+        super().__init__(write_interval="batch")
+        self.output_dir = output_dir
+
+    def write_on_batch_end(
+        self,
+        trainer: "pl.Trainer",
+        pl_module: MelodyPretrainModel,
+        prediction: torch.Tensor,
+        batch_indices: Optional[Sequence[int]],
+        batch: DatasetBatch,
+        batch_idx: int,
+        dataloader_idx: int,
+    ) -> None:
+        dest_path = os.path.join(self.output_dir, f"{batch_idx}.mid")
+        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+        prediction = prediction[0].cpu().numpy()
+        midi = pl_module.tokenizer.decode(prediction)
+        midi.dump(dest_path)
