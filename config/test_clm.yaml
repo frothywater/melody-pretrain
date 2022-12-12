@@ -1,6 +1,4 @@
 # lightning.pytorch==1.8.3.post1
-trainer:
-  default_root_dir: experiment/model/from_scratch_clm
 model:
   dataset_dir: experiment/dataset/wikifonia
 data:
@@ -9,4 +7,4 @@ data:
     class_path: DataCollatorForCausalLanguageModeling
     init_args:
       seq_len: 512
-      random_crop: true
+      random_crop: false

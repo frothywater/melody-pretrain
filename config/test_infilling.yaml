@@ -1,0 +1,16 @@
+# lightning.pytorch==1.8.3.post1
+model:
+  dataset_dir: experiment/dataset/wikifonia
+data:
+  dataset_dir: experiment/dataset/wikifonia
+  data_collator:
+    class_path: DataCollatorForPrefixMaskedLanguageModeling
+    init_args:
+      masking:
+        class_path: FixedBarMasking
+        init_args:
+          num_past_bars: 6
+          num_middle_bars: 4
+          num_future_bars: 6
+          random_crop: false
+  load_bar_data: true

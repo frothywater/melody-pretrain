@@ -10,17 +10,20 @@ class CustomLightningCLI(LightningCLI):
         parser.add_argument("--load_from_checkpoint", type=Optional[str], default=None)
 
     def before_fit(self) -> None:
-        load_from_checkpoint_path = self.config["fit"]["load_from_checkpoint"]
+        load_from_checkpoint_path = self.config.fit.load_from_checkpoint
         if load_from_checkpoint_path is not None:
-            self.model = self._model_class.load_from_checkpoint(
+            model_class = type(self.model)
+            model_config = self.config.fit.model
+            model_args = model_config.init_args if "init_args" in model_config else model_config
+            self.model = model_class.load_from_checkpoint(
                 load_from_checkpoint_path,
-                **self.config["fit"]["model"],
+                **model_args,
             )
             print("Loaded model from checkpoint:", load_from_checkpoint_path)
 
 
 def cli_main():
-    _ = CustomLightningCLI(MelodyPretrainModel, MelodyPretrainDataModule)
+    _ = CustomLightningCLI(datamodule_class=MelodyPretrainDataModule, save_config_kwargs={"overwrite": True})
 
 
 if __name__ == "__main__":
