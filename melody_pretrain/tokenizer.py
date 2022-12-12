@@ -90,12 +90,12 @@ class MIDITokenizer:
                 self.decoder[field_name][token_id] = token_str
             self.field_sizes[field_index] += len(self.special_token_str)
 
-        self.bos_token_ids = self.convert_tokens_to_ids([self.bos_token])[0]
-        self.eos_token_ids = self.convert_tokens_to_ids([self.eos_token])[0]
-        self.pad_token_ids = self.convert_tokens_to_ids([self.pad_token])[0]
-        self.sep_token_ids = self.convert_tokens_to_ids([self.sep_token])[0]
-        self.cls_token_ids = self.convert_tokens_to_ids([self.cls_token])[0]
-        self.mask_token_ids = self.convert_tokens_to_ids([self.mask_token])[0]
+        self.bos_token_ids = self.convert_token_to_id(self.bos_token)
+        self.eos_token_ids = self.convert_token_to_id(self.eos_token)
+        self.pad_token_ids = self.convert_token_to_id(self.pad_token)
+        self.sep_token_ids = self.convert_token_to_id(self.sep_token)
+        self.cls_token_ids = self.convert_token_to_id(self.cls_token)
+        self.mask_token_ids = self.convert_token_to_id(self.mask_token)
         self.special_token_id_matrix = np.array(
             [
                 self.bos_token_ids,
