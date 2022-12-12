@@ -344,7 +344,6 @@ class RandomBarMasking(InfillingMasking):
         # TODO: Use BERT-style masking.
         label = data.copy()
         seq_len, _ = data.shape
-        print(data)
 
         bar_spans = kwargs[self.extra_data_field_name]
         bar_spans = self._process_bar_spans(bar_spans, offset, offset + seq_len)
@@ -384,6 +383,62 @@ class RandomBarMasking(InfillingMasking):
                 masked_data += [data[start:end]]
         masked_data = np.concatenate(masked_data)
         target = np.concatenate(target)
+        return masked_data, target
+
+
+class FixedBarMasking(RandomBarMasking):
+    need_to_mask_per_data = True
+
+    def __init__(
+        self,
+        num_past_bars: int,
+        num_middle_bars: int,
+        num_future_bars: int,
+        extra_data_field_name: str = "bar_spans",
+        random_crop: bool = False,
+    ):
+        super().__init__()
+        self.num_past_bars = num_past_bars
+        self.num_middle_bars = num_middle_bars
+        self.num_future_bars = num_future_bars
+        self.num_total_bars = num_past_bars + num_middle_bars + num_future_bars
+        self.extra_data_field_name = extra_data_field_name
+        self.random_crop = random_crop
+
+    def _get_fixed_bar_spans(self, bar_spans: np.ndarray) -> Tuple[int, int, int, int]:
+        """Get fixed noise bar spans based on given numbers of past, masking and future bars.
+        Args:
+            bar_spans: (num_bars, 2) array of (start, end) indices
+        Returns:
+            past_start, past_end, future_start, future_end: indices of past, masking and future bars
+        """
+        num_bars = len(bar_spans)
+        assert num_bars >= self.num_total_bars, f"num_bars ({num_bars}) < num_total_bars ({self.num_total_bars})"
+        start_bar_index = np.random.randint(num_bars - self.num_total_bars + 1) if self.random_crop else 0
+        past_start = bar_spans[start_bar_index, 0]
+        past_end = bar_spans[start_bar_index + self.num_past_bars - 1, 1]
+        future_start = bar_spans[start_bar_index + self.num_past_bars + self.num_middle_bars, 0]
+        future_end = bar_spans[start_bar_index + self.num_total_bars - 1, 1]
+        return past_start, past_end, future_start, future_end
+
+    def mask_for_infilling(self, data: np.ndarray, **kwargs) -> Tuple[np.ndarray, np.ndarray]:
+        """Mask data with fixed noise bars based on given numbers of past, masking and future bars.
+        Random cropping should be handled here rather than in the data collator.
+        Args:
+            data: (seq_len, num_features)
+            bar_spans: (num_bars, 2) array of (start, end) indices
+        Returns:
+            masked_data: (masked_seq_len, num_features), with form of {tokens, [MASK], tokens}
+            target: (infilling_seq_len, num_features), with form of {<SEP>, tokens}
+        """
+        bar_spans = kwargs[self.extra_data_field_name]
+        past_start, past_end, future_start, future_end = self._get_fixed_bar_spans(bar_spans)
+
+        past = data[past_start:past_end]
+        future = data[future_start:future_end]
+        middle = data[past_end:future_start]
+        masked_data = np.concatenate([past, [self.tokenizer.mask_token_ids], future])
+        target = np.concatenate([[self.tokenizer.sep_token_ids], middle])
         return masked_data, target
 
 
@@ -494,7 +549,7 @@ class RandomNgramMasking(InfillingMasking):
 
 
 class DataCollator:
-    def __init__(self, seq_len: int, random_crop: bool = False):
+    def __init__(self, seq_len: Optional[int] = None, random_crop: bool = False):
         self.tokenizer: MIDITokenizer
         self.seq_len = seq_len
         self.random_crop = random_crop
@@ -503,17 +558,19 @@ class DataCollator:
         self.tokenizer = tokenizer
 
     def truncate(
-        self, batch: List[np.ndarray], max_length: int, random_crop: bool = False
+        self, batch: List[np.ndarray], max_length: Optional[int], random_crop: bool = False
     ) -> Tuple[List[np.ndarray], List[int]]:
         """Truncate batch to given maximum length.
         Args:
             batch: list of (seq_len, num_features)
-            max_length: maximum length of the batch
+            max_length: maximum length of the batch, if None, no truncation is performed.
             random_crop: whether to crop the batch randomly
         Returns:
             batch: list of (max_length, num_features)
             offsets: list of offsets
         """
+        if max_length is None:
+            return batch, [0] * len(batch)
         if random_crop:
             # randomly crop a segment of max_length
             # if the length of the batch is longer than max_length
@@ -568,16 +625,55 @@ class DatasetBatch(NamedTuple):
 
 
 class DataCollatorForPaddingOnly(DataCollator):
-    def __init__(self, seq_len: int):
+    """Data collator for padding only, useful in inference stage."""
+
+    def __init__(self, seq_len: Optional[int] = None):
         super().__init__(seq_len)
 
     def __call__(self, batch: List[DatasetItem]) -> DatasetBatch:
+        # TODO: Consider right side padding for batch inference?
         data_list = [item.data for item in batch]
         data_list, _ = self.truncate(data_list, self.seq_len)
         data_list = self.pad(data_list, self.seq_len)
         input_ids = np.stack(data_list, axis=0)
+        _, seq_len, _ = input_ids.shape
         input_ids = torch.tensor(input_ids, dtype=torch.long)
-        padding_mask = torch.tensor([[0] * len(data) + [1] * (self.seq_len - len(data)) for data in data_list], dtype=torch.bool)
+        padding_mask = torch.tensor(
+            [[0] * len(data) + [1] * (seq_len - len(data)) for data in data_list], dtype=torch.bool
+        )
+        label_ids = None
+        attention_mask = None
+
+        return DatasetBatch(input_ids, label_ids, padding_mask, attention_mask)
+
+
+class DataCollatorForInfilling(DataCollator):
+    """Data collator for infilling task, intended for prefix-style inference.
+    Support fixed bar masking for now."""
+
+    def __init__(self, masking: FixedBarMasking):
+        super().__init__()
+        self.masking = masking
+
+    def setup_tokenizer(self, tokenizer: MIDITokenizer):
+        super().setup_tokenizer(tokenizer)
+        self.masking.setup_tokenizer(tokenizer)
+
+    def __call__(self, batch: List[DatasetItem]) -> DatasetBatch:
+        data_list = [item.data for item in batch]
+        extra_data_list = [item.extra_data for item in batch]
+        # Only collect masked data
+        data_list = [
+            self.masking.mask_for_infilling(data, **extra_data)[0]
+            for data, extra_data in zip(data_list, extra_data_list)
+        ]
+        data_list = self.pad(data_list)
+        input_ids = np.stack(data_list, axis=0)
+        _, seq_len, _ = input_ids.shape
+        input_ids = torch.tensor(input_ids, dtype=torch.long)
+        padding_mask = torch.tensor(
+            [[0] * len(data) + [1] * (seq_len - len(data)) for data in data_list], dtype=torch.bool
+        )
         label_ids = None
         attention_mask = None
 
@@ -585,20 +681,14 @@ class DataCollatorForPaddingOnly(DataCollator):
 
 
 class DataCollatorForCausalLanguageModeling(DataCollator):
-    def __init__(
-        self, seq_len: int, random_crop: bool = False, add_trailing_mask: bool = False
-    ):
+    def __init__(self, seq_len: Optional[int] = None, random_crop: bool = False):
         super().__init__(seq_len, random_crop)
-        self.add_trailing_mask = add_trailing_mask
 
     def __call__(self, batch: List[DatasetItem]) -> Tuple[torch.Tensor, torch.Tensor]:
         data_list = [item.data for item in batch]
 
-        raw_length = self.seq_len if self.add_trailing_mask else self.seq_len + 1
-        data_list, _ = self.truncate(data_list, raw_length, random_crop=self.random_crop)
-        # if self.add_trailing_mask:
-        #     for i, data in enumerate(data_list):
-        #         data = np.concatenate([data, [self.tokenizer.mask_token_ids]], axis=0)
+        if self.seq_len is not None:
+            data_list, _ = self.truncate(data_list, self.seq_len + 1, random_crop=self.random_crop)
 
         lengths = [len(data) for data in data_list]
         data_list = self.pad(data_list)
@@ -616,7 +706,7 @@ class DataCollatorForCausalLanguageModeling(DataCollator):
 
 
 class DataCollatorForMaskedLanguageModeling(DataCollator):
-    def __init__(self, masking: Masking, seq_len: int, random_crop: bool = False):
+    def __init__(self, masking: Masking, seq_len: Optional[int] = None, random_crop: bool = False):
         super().__init__(seq_len, random_crop)
         self.masking = masking
 
@@ -655,7 +745,7 @@ class DataCollatorForMaskedLanguageModeling(DataCollator):
 
 
 class DataCollatorForPrefixMaskedLanguageModeling(DataCollator):
-    def __init__(self, masking: InfillingMasking, seq_len: int, random_crop: bool = False):
+    def __init__(self, masking: InfillingMasking, seq_len: Optional[int] = None, random_crop: bool = False):
         super().__init__(seq_len, random_crop)
         self.masking = masking
 
@@ -687,6 +777,24 @@ class DataCollatorForPrefixMaskedLanguageModeling(DataCollator):
         )
         return input, label
 
+    def _get_prefix_attention_mask(self, prefix_lengths: List[int], seq_len: int) -> torch.Tensor:
+        attention_masks = []
+        for prefix_length in prefix_lengths:
+            # bidirectional attention mask for prefix sequence
+            left_prefix_part = torch.zeros((seq_len, prefix_length), dtype=torch.bool)
+
+            target_length = seq_len - prefix_length
+            top_right_target_part = torch.ones((prefix_length, target_length), dtype=torch.bool)
+            # causal attention mask for infilling sequence
+            bottom_right_target_part = torch.triu(
+                torch.ones((target_length, target_length), dtype=torch.bool), diagonal=1
+            )
+
+            right_target_part = torch.cat([top_right_target_part, bottom_right_target_part], dim=0)
+            mask = torch.cat([left_prefix_part, right_target_part], dim=1)
+            attention_masks.append(mask)
+        return torch.stack(attention_masks, dim=0)
+
     def __call__(self, batch: List[DatasetItem]) -> Tuple[torch.Tensor, torch.Tensor]:
         data_list = [item.data for item in batch]
         extra_data_list = [item.extra_data for item in batch]
@@ -709,28 +817,12 @@ class DataCollatorForPrefixMaskedLanguageModeling(DataCollator):
         label_ids = torch.from_numpy(np.stack(self.pad(labels), axis=0)).long()
 
         batch_size, seq_len, _ = input_ids.shape
-        attention_masks = []
         padding_mask = torch.zeros((batch_size, seq_len), dtype=torch.bool)
-
-        # prefix attention mask
-        for i, (prefix_length, full_length) in enumerate(zip(prefix_lengths, full_lengths)):
+        for i, full_length in enumerate(full_lengths):
             padding_mask[i, full_length:] = True
 
-            # bidirectional attention mask for prefix sequence
-            left_prefix_part = torch.zeros((seq_len, prefix_length), dtype=torch.bool)
-
-            target_length = seq_len - prefix_length
-            top_right_target_part = torch.ones((prefix_length, target_length), dtype=torch.bool)
-            # causal attention mask for infilling sequence
-            bottom_right_target_part = torch.triu(
-                torch.ones((target_length, target_length), dtype=torch.bool), diagonal=1
-            )
-
-            right_target_part = torch.cat([top_right_target_part, bottom_right_target_part], dim=0)
-            mask = torch.cat([left_prefix_part, right_target_part], dim=1)
-            attention_masks.append(mask)
-        # (batch_size, seq_len, seq_len)
-        attention_mask = torch.stack(attention_masks, dim=0)
+        # prefix attention mask (batch_size, seq_len, seq_len)
+        attention_mask = self._get_prefix_attention_mask(prefix_lengths, seq_len)
 
         return DatasetBatch(input_ids, label_ids, padding_mask, attention_mask)
 
@@ -825,7 +917,7 @@ class MelodyPretrainDataModule(pl.LightningDataModule):
             num_workers=self.num_workers,
             pin_memory=True,
         )
-    
+
     def predict_dataloader(self):
         # batch_size=1 for prediction currently
         return DataLoader(
