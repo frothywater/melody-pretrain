@@ -17,10 +17,10 @@ data:
           maskings:
             - class_path: RandomNgramMasking
               init_args:
-                corruption_rate: 0.3
+                corruption_rate: 0.15
                 extra_data_field_name: pitch_ngrams
             - class_path: RandomNgramMasking
               init_args:
-                corruption_rate: 0.3
+                corruption_rate: 0.15
                 extra_data_field_name: rhythm_ngrams
   load_ngram_data: true

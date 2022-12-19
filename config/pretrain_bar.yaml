@@ -13,5 +13,5 @@ data:
       masking:
         class_path: RandomBarMasking
         init_args:
-          corruption_rate: 0.3
+          corruption_rate: 0.15
   load_bar_data: true

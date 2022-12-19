@@ -2,11 +2,11 @@
 seed_everything: 42
 trainer:
   callbacks:
-    - class_path: EarlyStopping
-      init_args:
-        monitor: val_loss
-        patience: 10
-        min_delta: 0
+    # - class_path: EarlyStopping
+    #   init_args:
+    #     monitor: val_loss
+    #     patience: 10
+    #     min_delta: 0
     - class_path: StochasticWeightAveraging
       init_args:
         swa_lrs: 1e-2
@@ -19,9 +19,15 @@ trainer:
         monitor: val_loss
         mode: min
         filename: "{epoch:02d}-{val_loss:.3f}"
+    - class_path: ModelCheckpoint
+      init_args:
+        save_top_k: 1
+        monitor: step
+        mode: max
+        filename: "{epoch:02d}-{step}"
   gradient_clip_val: 1.0
   devices: 1
-  max_steps: 20000
+  max_steps: 10000
   log_every_n_steps: 1
   accelerator: gpu
   strategy:
@@ -29,9 +35,9 @@ trainer:
     init_args:
       find_unused_parameters: false
   precision: 16
-  accumulate_grad_batches: 4
+  accumulate_grad_batches: 8
 data:
-  batch_size: 16
+  batch_size: 8
   num_workers: 4
 
 # debug

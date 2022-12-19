@@ -13,15 +13,15 @@ data:
       masking:
         class_path: MultiTargetInfillingMasking
         init_args:
-          probabilities: [0.4, 0.4, 0.2]
+          probabilities: [0.33, 0.33, 0.33]
           maskings:
             - class_path: RandomNgramMasking
               init_args:
-                corruption_rate: 0.3
+                corruption_rate: 0.15
                 extra_data_field_name: pitch_ngrams
             - class_path: RandomNgramMasking
               init_args:
-                corruption_rate: 0.3
+                corruption_rate: 0.15
                 extra_data_field_name: rhythm_ngrams
             - class_path: SingleSpanMasking
               init_args:
