@@ -110,7 +110,8 @@ class MultiTargetInfillingMasking(InfillingMasking):
     def __init__(self, maskings: Tuple[InfillingMasking, ...], probabilities: Tuple[float, ...]):
         assert len(maskings) == len(probabilities), "Number of maskings should be the same as number of probabilities"
         self.maskings = maskings
-        self.probabilities = probabilities
+        # normalize probabilities
+        self.probabilities = np.array(probabilities) / sum(probabilities)
         self.need_to_mask_per_data = any(masking.need_to_mask_per_data for masking in maskings)
 
     def setup_tokenizer(self, tokenizer: MIDITokenizer):
@@ -316,19 +317,30 @@ class RandomBarMasking(InfillingMasking):
         bar_spans = bar_spans - start
         return bar_spans
 
-    def _get_random_noise_bars(self, num_bars: int) -> np.ndarray:
+    def _get_random_noise_bars(self, bar_spans: np.ndarray, length: int) -> np.ndarray:
         """Get random noise bars.
         Args:
-            num_bars: number of bars
+            bar_spans: (num_bars, 2) array, where each row is a bar span.
+            length: an integer scalar, the length of the sequence.
         Returns:
             noise_bars: (num_bars) bool array, where True means noise bar.
         """
-        # Assuming the distribution of notes within bars is uniform,
-        # so that the number of noise bars is proportional to the number of noise notes.
-        num_noise_bars = int(round(num_bars * self.corruption_rate))
-        num_noise_bars = min(max(num_noise_bars, 1), num_bars - 1)
+        num_bars = len(bar_spans)
+        num_noise_tokens = int(round(length * self.corruption_rate))
+        num_noise_tokens = min(max(num_noise_tokens, 1), length - 1)
+
+        # Randomly select bars until we have enough noise bars
+        random_bar_indices = np.arange(num_bars)
+        np.random.shuffle(random_bar_indices)
         noise_bars = np.zeros(num_bars, dtype=bool)
-        noise_bars[np.random.choice(num_bars, num_noise_bars, replace=False)] = True
+        current_noise_tokens = 0
+        for index in random_bar_indices:
+            if current_noise_tokens >= num_noise_tokens:
+                break
+            noise_bars[index] = True
+            start, end = bar_spans[index]
+            current_noise_tokens += end - start
+
         return noise_bars
 
     def mask(self, data: np.ndarray, offset: int, **kwargs) -> Tuple[np.ndarray, np.ndarray]:
@@ -347,7 +359,7 @@ class RandomBarMasking(InfillingMasking):
 
         bar_spans = kwargs[self.extra_data_field_name]
         bar_spans = self._process_bar_spans(bar_spans, offset, offset + seq_len)
-        noise_bars = self._get_random_noise_bars(len(bar_spans))
+        noise_bars = self._get_random_noise_bars(bar_spans, seq_len)
         noise_bar_spans = bar_spans[noise_bars]
         mask_indices = np.zeros(seq_len, dtype=bool)
         for start, end in noise_bar_spans:
@@ -370,7 +382,7 @@ class RandomBarMasking(InfillingMasking):
         seq_len, _ = data.shape
         bar_spans = kwargs[self.extra_data_field_name]
         bar_spans = self._process_bar_spans(bar_spans, offset, offset + seq_len)
-        noise_bars = self._get_random_noise_bars(len(bar_spans))
+        noise_bars = self._get_random_noise_bars(bar_spans, seq_len)
 
         masked_data, target = [], []
         for i, (start, end) in enumerate(bar_spans):
@@ -445,10 +457,11 @@ class FixedBarMasking(RandomBarMasking):
 class RandomNgramMasking(InfillingMasking):
     need_to_mask_per_data = True
 
-    def __init__(self, corruption_rate: float = 0.15, extra_data_field_name: str = "ngrams"):
+    def __init__(self, corruption_rate: float = 0.15, extra_data_field_name: str = "ngrams", fallback_mean_span_length: int = 3):
         super().__init__()
         self.corruption_rate = corruption_rate
         self.extra_data_field_name = extra_data_field_name
+        self.fallback_mean_span_length = fallback_mean_span_length
 
     def _process_ngram_spans(self, ngram_spans: np.ndarray, start: int, end: int) -> np.ndarray:
         """Pick ngram spans within given range and shift them to start from 0."""
@@ -487,8 +500,8 @@ class RandomNgramMasking(InfillingMasking):
             covered_indices[start : start + length] = True
             current_noise_tokens += length
 
-        # if current_noise_tokens < num_noise_tokens:
-        # print(f"Warning: Not enough ngrams to corrupt, {current_noise_tokens} / {num_noise_tokens}")
+        # TODO: Handle the case where there are not enough ngrams to mask. Should we use random spans instead?
+
         return noise_ngrams
 
     def mask(self, data: np.ndarray, offset: int, **kwargs) -> Tuple[np.ndarray, np.ndarray]:
