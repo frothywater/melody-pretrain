@@ -1,5 +1,5 @@
 from melody_pretrain.dataset import (
-    # DataCollatorForCausalLanguageModeling,
+    DataCollatorForCausalLanguageModeling,
     DataCollatorForPrefixMaskedLanguageModeling,
     DataCollatorForInfilling,
     DatasetBatch,

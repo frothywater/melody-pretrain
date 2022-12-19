@@ -1,11 +1,11 @@
 import inspect
 from typing import Optional
 from lightning.pytorch.cli import LightningCLI
-from melody_pretrain.model import MelodyPretrainModel
 from melody_pretrain.dataset import MelodyPretrainDataModule
 
 
 class CustomLightningCLI(LightningCLI):
+    """Lightning CLI does not support loading from checkpoint from now, so we need to override it."""
     def add_arguments_to_parser(self, parser) -> None:
         parser.add_argument("--load_from_checkpoint", type=Optional[str], default=None)
 

@@ -22,9 +22,15 @@ class MIDICompoundToken(NamedTuple):
 
 class MIDITokenizer:
     def __init__(self, granularity=64, max_bar=128, pitch_range: Tuple[int, int] = (0, 128)) -> None:
+        """Initialize a MIDITokenizer instance.
+        Args:
+            granularity: The number of units per bar. Defaults to 64 (64-th note).
+            max_bar: The maximum number of bar token to use. Exceeded ones will be mod by the number. Defaults to 128.
+            pitch_range: The range of pitch token to use. Defaults to (0, 128)."""
         self.granularity = granularity
         self.max_bar = max_bar
 
+        # define bins for each field
         self.pitch_range = range(pitch_range[0], pitch_range[1])
         self.ticks_per_bar = 1920
         self.units_per_bar = granularity
@@ -61,7 +67,7 @@ class MIDITokenizer:
             for field_name in self.field_names
         }
 
-        # add special tokens
+        # special tokens
         self.bos_token_str = "<BOS>"
         self.eos_token_str = "<EOS>"
         self.pad_token_str = "<PAD>"
@@ -83,6 +89,7 @@ class MIDITokenizer:
             self.mask_token_str,
         ]
 
+        # add special tokens to the encoder and decoder
         for field_index, field_name in enumerate(self.field_names):
             for i, token_str in enumerate(self.special_token_str):
                 token_id = len(self.vocabularies[field_name]) + i
@@ -108,6 +115,7 @@ class MIDITokenizer:
         ).T  # (num_features, num_tokens)
 
     def tokenize(self, midi: MidiFile) -> List[MIDICompoundToken]:
+        """Tokenize a midi file into a list of MIDICompoundToken."""
         assert len(midi.instruments) == 1, "Only support single instrument midi file."
 
         tokens: List[MIDICompoundToken] = []
@@ -148,6 +156,7 @@ class MIDITokenizer:
         return result
 
     def detokenize(self, tokens: List[MIDICompoundToken], velocity=100) -> MidiFile:
+        """Detokenize a list of MIDICompoundToken into a midi file."""
         midi = MidiFile()
         notes = []
         for token in tokens:
@@ -219,6 +228,7 @@ class MIDITokenizer:
 
 
 if __name__ == "__main__":
+    # testing
     tokenizer = MIDITokenizer()
     print("field_names:", tokenizer.field_names)
     print("field_indices:", tokenizer.field_indices)

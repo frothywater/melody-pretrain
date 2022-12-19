@@ -12,6 +12,8 @@ from .tokenizer import MIDITokenizer
 
 
 class CompoundTokenFuser(nn.Module):
+    """Fuses multiple token embeddings into a single embedding."""
+
     def __init__(self, tokenizer: MIDITokenizer, embedding_dim: Union[int, Tuple[int, ...]], model_dim: int) -> None:
         super().__init__()
         self.tokenizer = tokenizer
@@ -66,6 +68,8 @@ class CompoundTokenFuser(nn.Module):
 
 
 class MelodyModel(pl.LightningModule):
+    """Base model for core step logic."""
+
     def __init__(
         self,
         # Instantiate the tokenizer using config file in the dataset directory
@@ -167,6 +171,8 @@ class MelodyModel(pl.LightningModule):
 
 
 class MelodyPretrainModel(MelodyModel):
+    """Use this subclass for pretraining or finetuning the model."""
+
     def __init__(
         self,
         # Instantiate the tokenizer using config file in the dataset directory
@@ -213,41 +219,8 @@ class MelodyPretrainModel(MelodyModel):
         return [optimizer], [scheduler]
 
 
-def top_k_sample(logits: torch.Tensor, k: int, t: float = 1.0) -> torch.Tensor:
-    """Sample from the top k logits with temperature t"""
-    assert k > 0, "k must be greater than 0"
-    assert t > 0, "t must be greater than 0"
-    logits = logits / t
-    top_k_logits, top_k_indices = torch.topk(logits, k)
-    top_k_probs = F.softmax(top_k_logits, dim=-1)
-    sampled_index = torch.multinomial(top_k_probs, 1)
-    sampled_token = top_k_indices.gather(0, sampled_index)
-    return sampled_token
-
-
-class CustomWriter(BasePredictionWriter):
-    def __init__(self, output_dir: str):
-        super().__init__(write_interval="batch")
-        self.output_dir = output_dir
-
-    def write_on_batch_end(
-        self,
-        trainer: "pl.Trainer",
-        pl_module: MelodyPretrainModel,
-        prediction: torch.Tensor,
-        batch_indices: Optional[Sequence[int]],
-        batch: DatasetBatch,
-        batch_idx: int,
-        dataloader_idx: int,
-    ) -> None:
-        dest_path = os.path.join(self.output_dir, f"{batch_idx}.mid")
-        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-        prediction = prediction[0].cpu().numpy()
-        midi = pl_module.tokenizer.decode(prediction)
-        midi.dump(dest_path)
-
-
 class MelodyCompletionModel(MelodyModel):
+    """Use this subclass for the melody completion downstream task."""
     def __init__(
         self,
         # Instantiate the tokenizer using config file in the dataset directory
@@ -324,6 +297,7 @@ class MelodyCompletionModel(MelodyModel):
 
 
 class MelodyInfillingModel(MelodyModel):
+    """Use this subclass for the melody infilling downstream task."""
     def __init__(
         self,
         # Instantiate the tokenizer using config file in the dataset directory
@@ -419,3 +393,41 @@ class MelodyInfillingModel(MelodyModel):
             dim=1,
         )
         return input_ids
+
+
+def top_k_sample(logits: torch.Tensor, k: int, t: float = 1.0) -> torch.Tensor:
+    """Sample from the top k logits with temperature t"""
+    assert k > 0, "k must be greater than 0"
+    assert t > 0, "t must be greater than 0"
+    logits = logits / t
+    top_k_logits, top_k_indices = torch.topk(logits, k)
+    top_k_probs = F.softmax(top_k_logits, dim=-1)
+    sampled_index = torch.multinomial(top_k_probs, 1)
+    sampled_token = top_k_indices.gather(0, sampled_index)
+    return sampled_token
+
+
+class CustomWriter(BasePredictionWriter):
+    """Write the prediction to a MIDI file."""
+
+    # TODO: Write correct file name.
+
+    def __init__(self, output_dir: str):
+        super().__init__(write_interval="batch")
+        self.output_dir = output_dir
+
+    def write_on_batch_end(
+        self,
+        trainer: "pl.Trainer",
+        pl_module: MelodyPretrainModel,
+        prediction: torch.Tensor,
+        batch_indices: Optional[Sequence[int]],
+        batch: DatasetBatch,
+        batch_idx: int,
+        dataloader_idx: int,
+    ) -> None:
+        dest_path = os.path.join(self.output_dir, f"{batch_idx}.mid")
+        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+        prediction = prediction[0].cpu().numpy()
+        midi = pl_module.tokenizer.decode(prediction)
+        midi.dump(dest_path)
