@@ -163,12 +163,6 @@ class MelodyModel(pl.LightningModule):
         self.log("val_loss", loss, sync_dist=True)
         return loss
 
-    def test_step(self, batch: DatasetBatch, batch_idx: int) -> torch.Tensor:
-        logits = self._shared_step(batch)
-        loss = self._get_loss(logits, batch.label_ids)
-        self.log("test_loss", loss, sync_dist=True)
-        return loss
-
 
 class MelodyPretrainModel(MelodyModel):
     """Use this subclass for pretraining or finetuning the model."""
@@ -219,8 +213,77 @@ class MelodyPretrainModel(MelodyModel):
         return [optimizer], [scheduler]
 
 
+class MelodyTestingModel(MelodyModel):
+    def __init__(
+        self,
+        # Instantiate the tokenizer using config file in the dataset directory
+        dataset_dir: str,
+        # Model hyperparameters
+        embedding_dim: Union[int, Tuple[int, ...]],  # embedding_dim: (bar, position, duration, pitch)
+        model_dim: int,
+        feedforward_dim: int,
+        num_layers: int,
+        num_heads: int,
+        dropout: float,
+        # Testing hyperparameters
+        max_seq_len: int,
+        perplexity_stride: int,
+        **kwargs,
+    ) -> None:
+        super().__init__(
+            dataset_dir=dataset_dir,
+            embedding_dim=embedding_dim,
+            model_dim=model_dim,
+            feedforward_dim=feedforward_dim,
+            num_layers=num_layers,
+            num_heads=num_heads,
+            dropout=dropout,
+        )
+
+        self.max_seq_len = max_seq_len
+        self.perplexity_stride = perplexity_stride
+
+        self.pad_token_tensor = torch.from_numpy(self.tokenizer.pad_token_ids).long()
+
+    def test_step(self, batch: DatasetBatch, batch_idx: int) -> torch.Tensor:
+        """Calculate strided fixed-length perplexity for CLM model.
+        Reference: https://huggingface.co/docs/transformers/perplexity
+        """
+        input_ids, label_ids, padding_mask, attention_mask = batch
+        _, seq_len, _ = input_ids.shape
+        assert (
+            len(attention_mask.shape) == 2
+        ), "Only support calculating perplexity for CLM model, where attention mask should be 2D."
+
+        nlls = []
+        previous_end_index = 0
+        for start_index in range(0, seq_len, self.perplexity_stride):
+            end_index = min(start_index + self.max_seq_len, seq_len)
+            target_length = end_index - previous_end_index
+
+            # Mask out context tokens for labels
+            new_label_ids = label_ids[:, start_index:end_index, :].clone()
+            new_label_ids[:, :-target_length] = self.pad_token_tensor.to(new_label_ids.device)
+            new_batch = DatasetBatch(
+                input_ids=input_ids[:, start_index:end_index, :],
+                label_ids=new_label_ids,
+                padding_mask=padding_mask[:, start_index:end_index],
+                attention_mask=attention_mask[start_index:end_index, start_index:end_index],
+            )
+            logits = self._shared_step(new_batch)
+            loss = self._get_loss(logits, new_batch.label_ids)
+            neg_log_likelihood = loss * target_length
+            nlls.append(neg_log_likelihood)
+            previous_end_index = end_index
+
+        ppl = torch.exp(torch.stack(nlls).sum() / end_index)
+        self.log("ppl", ppl, sync_dist=True)
+        return ppl
+
+
 class MelodyCompletionModel(MelodyModel):
     """Use this subclass for the melody completion downstream task."""
+
     def __init__(
         self,
         # Instantiate the tokenizer using config file in the dataset directory
@@ -298,6 +361,7 @@ class MelodyCompletionModel(MelodyModel):
 
 class MelodyInfillingModel(MelodyModel):
     """Use this subclass for the melody infilling downstream task."""
+
     def __init__(
         self,
         # Instantiate the tokenizer using config file in the dataset directory

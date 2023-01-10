@@ -142,4 +142,5 @@ Thumbs.db
 .history/
 data/
 experiment/
+backup/
 .nfs*

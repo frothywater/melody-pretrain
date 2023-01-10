@@ -925,7 +925,7 @@ class MelodyPretrainDataModule(pl.LightningDataModule):
     def test_dataloader(self):
         return DataLoader(
             self.test_dataset,
-            batch_size=1,
+            batch_size=self.batch_size,
             collate_fn=self.data_collator,
             num_workers=self.num_workers,
             pin_memory=True,
