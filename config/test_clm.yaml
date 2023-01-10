@@ -1,10 +1,13 @@
 # lightning.pytorch==1.8.3.post1
+seed_everything: 42
 model:
-  dataset_dir: experiment/dataset/wikifonia
+  class_path: melody_pretrain.model.MelodyTestingModel
+  init_args:
+    dataset_dir: experiment/dataset/wikifonia
+    max_seq_len: 512
+    perplexity_stride: 128
 data:
+  batch_size: 8
   dataset_dir: experiment/dataset/wikifonia
   data_collator:
     class_path: DataCollatorForCausalLanguageModeling
-    init_args:
-      seq_len: 512
-      random_crop: false
