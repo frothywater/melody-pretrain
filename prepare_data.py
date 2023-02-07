@@ -13,11 +13,14 @@ from melody_pretrain.tokenizer import MIDITokenizer
 
 
 def prepare_data_job(midi_file: str, dest_path: str, tokenizer: MIDITokenizer, lexicon_path: str):
+    """Prepare data for a single midi file. Return the length of the encoded data."""
     midi = MidiFile(midi_file)
     data, bar_spans = tokenizer.encode(midi, return_bar_spans=True)
+    length, _ = data.shape
     pitch_ngrams, rhythm_ngrams = get_ngram_labels(midi_file, lexicon_path)
     os.makedirs(os.path.dirname(dest_path), exist_ok=True)
     np.savez(dest_path, data=data, bar_spans=bar_spans, pitch_ngrams=pitch_ngrams, rhythm_ngrams=rhythm_ngrams)
+    return length
 
 
 def prepare_data(midi_dir: str, dataset_dir: str, **kwargs):
@@ -34,7 +37,9 @@ def prepare_data(midi_dir: str, dataset_dir: str, **kwargs):
             pool.apply_async(prepare_data_job, args=(midi_file, dest_path, tokenizer, lexicon_path))
             for midi_file, dest_path in zip(midi_files, dest_paths)
         ]
-        _ = [future.get() for future in tqdm(futures)]
+        lengths = [future.get() for future in tqdm(futures)]
+    
+    print(f"average data length: {np.mean(lengths)}")
 
 
 if __name__ == "__main__":
