@@ -841,10 +841,21 @@ class DataCollatorForPrefixMaskedLanguageModeling(DataCollator):
 
 
 class MelodyDataset(Dataset):
-    def __init__(self, data_dir: str, load_bar_data: bool = False, load_ngram_data: bool = False):
+    def __init__(
+        self,
+        data_dir: str,
+        load_bar_data: bool = False,
+        load_ngram_data: bool = False,
+        pitch_augumentation: bool = False,
+    ):
+        self.tokenizer: MIDITokenizer
         self.files = glob(os.path.join(data_dir, "*.npz"))
         self.load_bar_data = load_bar_data
         self.load_ngram_data = load_ngram_data
+        self.pitch_augumentation = pitch_augumentation
+
+    def setup_tokenizer(self, tokenizer: MIDITokenizer):
+        self.tokenizer = tokenizer
 
     def __len__(self):
         return len(self.files)
@@ -852,6 +863,8 @@ class MelodyDataset(Dataset):
     def __getitem__(self, idx):
         file = np.load(self.files[idx])
         data = file["data"]
+        if self.pitch_augumentation:
+            self.tokenizer.pitch_shift_augument_(data)
         extra_data = {}
         if self.load_bar_data:
             extra_data["bar_spans"] = file["bar_spans"]
@@ -870,6 +883,7 @@ class MelodyPretrainDataModule(pl.LightningDataModule):
         num_workers: int = 0,
         load_bar_data: bool = False,
         load_ngram_data: bool = False,
+        pitch_augumentation: bool = False,
     ):
         super().__init__()
         self.dataset_dir = dataset_dir
@@ -885,22 +899,35 @@ class MelodyPretrainDataModule(pl.LightningDataModule):
         self.num_workers = num_workers
         self.load_bar_data = load_bar_data
         self.load_ngram_data = load_ngram_data
+        self.pitch_augumentation = pitch_augumentation
 
     def setup(self, stage: str):
         train_dir = os.path.join(self.dataset_dir, "train")
         valid_dir = os.path.join(self.dataset_dir, "valid")
         test_dir = os.path.join(self.dataset_dir, "test")
         self.train_dataset = MelodyDataset(
-            train_dir, load_bar_data=self.load_bar_data, load_ngram_data=self.load_ngram_data
+            train_dir,
+            load_bar_data=self.load_bar_data,
+            load_ngram_data=self.load_ngram_data,
+            pitch_augumentation=self.pitch_augumentation,
         )
+        self.train_dataset.setup_tokenizer(self.tokenizer)
         if os.path.exists(valid_dir):
             self.valid_dataset = MelodyDataset(
-                valid_dir, load_bar_data=self.load_bar_data, load_ngram_data=self.load_ngram_data
+                valid_dir,
+                load_bar_data=self.load_bar_data,
+                load_ngram_data=self.load_ngram_data,
+                pitch_augumentation=self.pitch_augumentation,
             )
+            self.valid_dataset.setup_tokenizer(self.tokenizer)
         if os.path.exists(test_dir):
             self.test_dataset = MelodyDataset(
-                test_dir, load_bar_data=self.load_bar_data, load_ngram_data=self.load_ngram_data
+                test_dir,
+                load_bar_data=self.load_bar_data,
+                load_ngram_data=self.load_ngram_data,
+                pitch_augumentation=self.pitch_augumentation,
             )
+            self.test_dataset.setup_tokenizer(self.tokenizer)
 
     def train_dataloader(self):
         return DataLoader(

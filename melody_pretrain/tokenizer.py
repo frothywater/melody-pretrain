@@ -211,6 +211,22 @@ class MIDITokenizer:
         tokens = self.convert_ids_to_tokens(token_ids)
         return self.detokenize(tokens)
 
+    def pitch_shift_augument_(self, token_ids: np.ndarray, shift_range: int = 6) -> None:
+        """Pitch shift augumentation. This method will modify the token_ids in place.
+        Args:
+            token_ids: (num_tokens, num_fields)
+            shift_range: pitch shift range in semitone. The direction may be upward or downward.
+        """
+        pitch_shift = np.random.randint(-shift_range, shift_range + 1)
+        pitch_field_index = self.field_indices["pitch"]
+
+        token_ids[:, pitch_field_index] += pitch_shift
+        # Adjust the positions that are out of range
+        too_low_mask = token_ids[:, pitch_field_index] < 0
+        too_high_mask = token_ids[:, pitch_field_index] >= self.pitch_range.stop
+        token_ids[too_low_mask, pitch_field_index] += 12
+        token_ids[too_high_mask, pitch_field_index] -= 12
+
     def _find_nearest(self, bins: List[int], value: int) -> int:
         """Find the nearest bin to the value."""
         return min(bins, key=lambda x: abs(x - value))
