@@ -457,7 +457,9 @@ class FixedBarMasking(RandomBarMasking):
 class RandomNgramMasking(InfillingMasking):
     need_to_mask_per_data = True
 
-    def __init__(self, corruption_rate: float = 0.15, extra_data_field_name: str = "ngrams", fallback_mean_span_length: int = 3):
+    def __init__(
+        self, corruption_rate: float = 0.15, extra_data_field_name: str = "ngrams", fallback_mean_span_length: int = 3
+    ):
         super().__init__()
         self.corruption_rate = corruption_rate
         self.extra_data_field_name = extra_data_field_name
@@ -468,7 +470,9 @@ class RandomNgramMasking(InfillingMasking):
         starts = ngram_spans[:, 0]
         ends = ngram_spans[:, 0] + ngram_spans[:, 1]
         ngram_spans = ngram_spans[(starts >= start) & (ends <= end)]
-        assert len(ngram_spans) > 0, "No ngram spans found."
+        
+        # TODO: Handle the case where there are no ngrams at all
+
         result = ngram_spans.copy()
         result[:, 0] -= start
         return result
@@ -522,6 +526,7 @@ class RandomNgramMasking(InfillingMasking):
         ngrams = self._process_ngram_spans(ngrams, offset, offset + seq_len)
         noise_ngrams = self._get_random_noise_ngrams(seq_len, ngrams)
         noise_ngram_spans = ngrams[noise_ngrams]
+
         mask_indices = np.zeros(seq_len, dtype=bool)
         for start, length, _ in noise_ngram_spans:
             mask_indices[start : start + length] = True
@@ -545,8 +550,15 @@ class RandomNgramMasking(InfillingMasking):
         ngrams = self._process_ngram_spans(ngrams, offset, offset + seq_len)
         noise_ngrams = self._get_random_noise_ngrams(seq_len, ngrams)
         noise_ngram_spans = ngrams[noise_ngrams]
+
         # sort by start index
         noise_ngram_spans = noise_ngram_spans[np.argsort(noise_ngram_spans[:, 0])]
+
+        # Temporary fix
+        if len(noise_ngram_spans) == 0:
+            masked_data = data
+            target = np.array([self.tokenizer.sep_token_ids])
+            return masked_data, target
 
         masked_data, target = [], []
         for i, (start, length, _) in enumerate(noise_ngram_spans):

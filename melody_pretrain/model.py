@@ -277,7 +277,7 @@ class MelodyTestingModel(MelodyModel):
             previous_end_index = end_index
 
         ppl = torch.exp(torch.stack(nlls).sum() / end_index)
-        self.log("ppl", ppl, sync_dist=True)
+        self.log("perplexity", ppl, sync_dist=True)
         return ppl
 
 
