@@ -5,7 +5,7 @@ trainer:
   max_steps: 2000
   accumulate_grad_batches: 8
 data:
-  batch_size: 64
+  batch_size: 96
   dataset_dir: experiment/dataset/wikifonia
   data_collator:
     class_path: DataCollatorForPrefixMaskedLanguageModeling
@@ -18,3 +18,4 @@ data:
           num_future_bars: 6
           random_crop: true
   load_bar_data: true
+  pitch_augumentation: True

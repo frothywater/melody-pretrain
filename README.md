@@ -5,85 +5,98 @@
 ### 1 Prepare n-gram lexicon
 ```bash
 python lexicon.py prepare \
---length 8 --top_p 0.1 \
---midi_dir ../midi-preprocess/data/done \
---dataset_dir experiment/dataset/pretrain_small
+--length 8 --top_p 0.02 \
+--midi_dir experiment/dataset/lmd/midi \
+--dataset_dir experiment/dataset/lmd
 
 python lexicon.py render \
---dataset_dir experiment/dataset/pretrain_small
+--dataset_dir experiment/dataset/lmd
 ```
 
 ### 2 Prepare dataset
 (Keep tokenizer configs the same between pretrain and finetune stages.)
 ```bash
 python prepare_data.py \
---midi_dir ../midi-preprocess/data/done \
---dataset_dir experiment/dataset/pretrain_small \
+--midi_dir experiment/dataset/lmd/midi \
+--dataset_dir experiment/dataset/lmd \
 --granularity 64 --max_bar 128 --pitch_range 0 128
 ```
 
 ### 3 Pretrain
 ```bash
+python main.py fit --config config/trainer.yaml --config config/model_small.yaml --config config/pretrain_bar.yaml --trainer.devices "0,"
+
 python main.py fit --config config/trainer.yaml --config config/model_small.yaml --config config/pretrain_span.yaml --trainer.devices "1,"
-python main.py fit --config config/trainer.yaml --config config/model_small.yaml --config config/pretrain_bar.yaml --trainer.devices "2,"
-python main.py fit --config config/trainer.yaml --config config/model_small.yaml --config config/pretrain_ngram.yaml --trainer.devices "3,"
-python main.py fit --config config/trainer.yaml --config config/model_small.yaml --config config/pretrain_ngram_multi.yaml --trainer.devices "4,"
+
+python main.py fit --config config/trainer.yaml --config config/model_small.yaml --config config/pretrain_ngram.yaml --trainer.devices "2,"
+
+python main.py fit --config config/trainer.yaml --config config/model_small.yaml --config config/pretrain_ngram_multi.yaml --trainer.devices "3,"
+
+python main.py fit --config config/trainer.yaml --config config/model_small.yaml --config config/pretrain_single.yaml --trainer.devices "1,"
+
+python main.py fit --config config/trainer.yaml --config config/model_small.yaml --config config/pretrain_ngram_explicit.yaml --trainer.devices "1,2,3,4" --ckpt_path experiment/model-lmd/pretrain_ngram_explicit/lightning_logs/version_1/checkpoints/epoch=69-train_loss=0.413-val_loss=0.534-step=700.ckpt
 ```
 
 ### 4 Finetune
 1. Causal lanugage modeling.
     ```bash
     # bar
-    python main.py fit --config config/trainer.yaml --config config/model_small.yaml --config config/finetune_clm.yaml --trainer.default_root_dir experiment/model/finetune_clm_bar --load_from_checkpoint experiment/model/pretrain_bar/lightning_logs/version_1/checkpoints/epoch=60-train_loss=0.172-val_loss=0.153-step=5000.ckpt --trainer.devices "1,"
+    python main.py fit --config config/trainer.yaml --config config/model_small.yaml --config config/finetune_clm.yaml --trainer.default_root_dir experiment/model-lmd/finetune_clm_bar --load_from_checkpoint experiment/model-lmd/pretrain_bar/lightning_logs/version_0/checkpoints/epoch=131-train_loss=0.086-val_loss=0.188-step=5000.ckpt --trainer.devices "1,"
 
     # span
-    python main.py fit --config config/trainer.yaml --config config/model_small.yaml --config config/finetune_clm.yaml --trainer.default_root_dir experiment/model/finetune_clm_span --load_from_checkpoint experiment/model/pretrain_span/lightning_logs/version_1/checkpoints/epoch=60-train_loss=0.228-val_loss=0.278-step=5000.ckpt --trainer.devices "2,"
+    python main.py fit --config config/trainer.yaml --config config/model_small.yaml --config config/finetune_clm.yaml --trainer.default_root_dir experiment/model-lmd/finetune_clm_span --load_from_checkpoint experiment/model-lmd/pretrain_span/lightning_logs/version_0/checkpoints/epoch=131-train_loss=0.269-val_loss=0.262-step=5000.ckpt --trainer.devices "2,"
 
     # ngram
-    python main.py fit --config config/trainer.yaml --config config/model_small.yaml --config config/finetune_clm.yaml --trainer.default_root_dir experiment/model/finetune_clm_ngram --load_from_checkpoint experiment/model/pretrain_ngram/lightning_logs/version_1/checkpoints/epoch=60-train_loss=0.121-val_loss=0.151-step=5000.ckpt --trainer.devices "3,"
+    python main.py fit --config config/trainer.yaml --config config/model_small.yaml --config config/finetune_clm.yaml --trainer.default_root_dir experiment/model-lmd/finetune_clm_ngram --load_from_checkpoint experiment/model-lmd/pretrain_ngram/lightning_logs/version_0/checkpoints/epoch=131-train_loss=0.043-val_loss=0.171-step=5000.ckpt --trainer.devices "3,"
 
     # ngram with multi-target
-    python main.py fit --config config/trainer.yaml --config config/model_small.yaml --config config/finetune_clm.yaml --trainer.default_root_dir experiment/model/finetune_clm_ngram_multi --load_from_checkpoint experiment/model/pretrain_ngram_multi/lightning_logs/version_1/checkpoints/epoch=60-train_loss=0.054-val_loss=0.110-step=5000.ckpt --trainer.devices "4,"
+    python main.py fit --config config/trainer.yaml --config config/model_small.yaml --config config/finetune_clm.yaml --trainer.default_root_dir experiment/model-lmd/finetune_clm_ngram_multi --load_from_checkpoint experiment/model-lmd/pretrain_ngram_multi/lightning_logs/version_0/checkpoints/epoch=131-train_loss=0.041-val_loss=0.125-step=5000.ckpt --trainer.devices "4,"
+
+    # single span
+    python main.py fit --config config/trainer.yaml --config config/model_small.yaml --config config/finetune_clm.yaml --trainer.default_root_dir experiment/model-lmd/finetune_clm_single --load_from_checkpoint experiment/model-lmd/pretrain_single/lightning_logs/version_0/checkpoints/epoch=131-train_loss=0.129-val_loss=0.255-step=5000.ckpt --trainer.devices "5,"
     ```
 2. Infilling.
     ```bash
     # bar
-    python main.py fit --config config/trainer.yaml --config config/model_small.yaml --config config/finetune_infilling.yaml --trainer.default_root_dir experiment/model/finetune_infilling_bar --load_from_checkpoint experiment/model/pretrain_bar/lightning_logs/version_1/checkpoints/epoch=240-step=20000.ckpt --trainer.devices "0,"
+    python main.py fit --config config/trainer.yaml --config config/model_small.yaml --config config/finetune_infilling.yaml --trainer.default_root_dir experiment/model-lmd/finetune_infilling_bar --load_from_checkpoint experiment/model-lmd/pretrain_bar/lightning_logs/version_0/checkpoints/epoch=131-train_loss=0.086-val_loss=0.188-step=5000.ckpt --trainer.devices "1,"
 
     # span
-    python main.py fit --config config/trainer.yaml --config config/model_small.yaml --config config/finetune_infilling.yaml --trainer.default_root_dir experiment/model/finetune_infilling_span --load_from_checkpoint experiment/model/pretrain_span/lightning_logs/version_1/checkpoints/epoch=240-step=20000.ckpt --trainer.devices "1,"
+    python main.py fit --config config/trainer.yaml --config config/model_small.yaml --config config/finetune_infilling.yaml --trainer.default_root_dir experiment/model-lmd/finetune_infilling_span --load_from_checkpoint experiment/model-lmd/pretrain_span/lightning_logs/version_0/checkpoints/epoch=131-train_loss=0.269-val_loss=0.262-step=5000.ckpt --trainer.devices "2,"
 
     # ngram
-    python main.py fit --config config/trainer.yaml --config config/model_small.yaml --config config/finetune_infilling.yaml --trainer.default_root_dir experiment/model/finetune_infilling_ngram --load_from_checkpoint experiment/model/pretrain_ngram/lightning_logs/version_1/checkpoints/epoch=240-step=20000.ckpt --trainer.devices "2,"
+    python main.py fit --config config/trainer.yaml --config config/model_small.yaml --config config/finetune_infilling.yaml --trainer.default_root_dir experiment/model-lmd/finetune_infilling_ngram --load_from_checkpoint experiment/model-lmd/pretrain_ngram/lightning_logs/version_0/checkpoints/epoch=131-train_loss=0.043-val_loss=0.171-step=5000.ckpt --trainer.devices "3,"
 
     # ngram with multi-target
-    python main.py fit --config config/trainer.yaml --config config/model_small.yaml --config config/finetune_infilling.yaml --trainer.default_root_dir experiment/model/finetune_infilling_ngram_multi --load_from_checkpoint experiment/model/pretrain_ngram_multi/lightning_logs/version_1/checkpoints/epoch=240-step=20000.ckpt --trainer.devices "3,"
+    python main.py fit --config config/trainer.yaml --config config/model_small.yaml --config config/finetune_infilling.yaml --trainer.default_root_dir experiment/model-lmd/finetune_infilling_ngram_multi --load_from_checkpoint experiment/model-lmd/pretrain_ngram_multi/lightning_logs/version_0/checkpoints/epoch=131-train_loss=0.041-val_loss=0.125-step=5000.ckpt --trainer.devices "4,"
+
+    # single span
+    python main.py fit --config config/trainer.yaml --config config/model_small.yaml --config config/finetune_infilling.yaml --trainer.default_root_dir experiment/model-lmd/finetune_infilling_single --load_from_checkpoint experiment/model-lmd/pretrain_single/lightning_logs/version_0/checkpoints/epoch=131-train_loss=0.129-val_loss=0.255-step=5000.ckpt --trainer.devices "6,"
 
 ### 5 Train from scratch
 (for comparison)
 ```bash
-python main.py fit --config config/trainer.yaml --config config/model_small.yaml --config config/from_scratch_clm.yaml --trainer.default_root_dir experiment/model/from_scratch_clm --trainer.devices "4,"
+python main.py fit --config config/trainer.yaml --config config/model_small.yaml --config config/from_scratch_clm.yaml --trainer.default_root_dir experiment/model-lmd/from_scratch_clm --trainer.devices "4,"
 
-python main.py fit --config config/trainer.yaml --config config/model_small.yaml --config config/from_scratch_infilling.yaml --trainer.default_root_dir experiment/model/from_scratch_infilling --trainer.devices "5,"
+python main.py fit --config config/trainer.yaml --config config/model_small.yaml --config config/from_scratch_infilling.yaml --trainer.default_root_dir experiment/model-lmd/from_scratch_infilling --trainer.devices "4,"
 ```
 
 ### 6 Test
 1. Causal lanugage modeling.
     ```bash
     # bar
-    python main.py test --config config/trainer.yaml --config config/model_small.yaml --config config/test_clm.yaml --trainer.default_root_dir experiment/model/finetune_clm_bar --ckpt_path experiment/model/finetune_clm_bar/lightning_logs/version_0/checkpoints/epoch=55-train_loss=0.501-val_loss=0.567-step=500.ckpt --trainer.devices "1,"
+    python main.py test --config config/trainer.yaml --config config/model_small.yaml --config config/test_clm.yaml --trainer.default_root_dir experiment/model-lmd/finetune_clm_bar --ckpt_path experiment/model-lmd/finetune_clm_bar/lightning_logs/version_0/checkpoints/epoch=51-train_loss=0.667-val_loss=0.563.ckpt --trainer.devices "0,"
 
     # span
-    python main.py test --config config/trainer.yaml --config config/model_small.yaml --config config/test_clm.yaml --trainer.default_root_dir experiment/model/finetune_clm_span --ckpt_path experiment/model/finetune_clm_span/lightning_logs/version_0/checkpoints/epoch=55-train_loss=0.608-val_loss=0.685-step=500.ckpt --trainer.devices "2,"
+    python main.py test --config config/trainer.yaml --config config/model_small.yaml --config config/test_clm.yaml --trainer.default_root_dir experiment/model-lmd/finetune_clm_span --ckpt_path experiment/model-lmd/finetune_clm_span/lightning_logs/version_0/checkpoints/epoch=47-train_loss=0.609-val_loss=0.577.ckpt --trainer.devices "1,"
 
     # ngram
-    python main.py test --config config/trainer.yaml --config config/model_small.yaml --config config/test_clm.yaml --trainer.default_root_dir experiment/model/finetune_clm_ngram --ckpt_path experiment/model/finetune_clm_ngram/lightning_logs/version_0/checkpoints/epoch=55-train_loss=0.521-val_loss=0.590-step=500.ckpt --trainer.devices "3,"
+    python main.py test --config config/trainer.yaml --config config/model_small.yaml --config config/test_clm.yaml --trainer.default_root_dir experiment/model-lmd/finetune_clm_ngram --ckpt_path experiment/model-lmd/finetune_clm_ngram/lightning_logs/version_0/checkpoints/epoch=50-train_loss=0.595-val_loss=0.547.ckpt --trainer.devices "2,"
 
     # ngram with multi-target
-    python main.py test --config config/trainer.yaml --config config/model_small.yaml --config config/test_clm.yaml --trainer.default_root_dir experiment/model/finetune_clm_ngram_multi --ckpt_path experiment/model/finetune_clm_ngram_multi/lightning_logs/version_0/checkpoints/epoch=55-train_loss=0.470-val_loss=0.549-step=500.ckpt --trainer.devices "4,"
+    python main.py test --config config/trainer.yaml --config config/model_small.yaml --config config/test_clm.yaml --trainer.default_root_dir experiment/model-lmd/finetune_clm_ngram_multi --ckpt_path experiment/model-lmd/finetune_clm_ngram_multi/lightning_logs/version_0/checkpoints/epoch=48-train_loss=0.508-val_loss=0.511.ckpt --trainer.devices "3,"
 
     # from scratch
-    python main.py test --config config/trainer.yaml --config config/model_small.yaml --config config/test_clm.yaml --trainer.default_root_dir experiment/model/from_scratch_clm --ckpt_path experiment/model/from_scratch_clm/lightning_logs/version_0/checkpoints/epoch=43-train_loss=0.523-val_loss=0.658.ckpt --trainer.devices "5,"
+    python main.py test --config config/trainer.yaml --config config/model_small.yaml --config config/test_clm.yaml --trainer.default_root_dir experiment/model-lmd/from_scratch_clm --ckpt_path experiment/model-lmd/from_scratch_clm/lightning_logs/version_0/checkpoints/epoch=65-train_loss=0.446-val_loss=0.543.ckpt --trainer.devices "4,"
     ```
 2. Infilling.
     ```bash
