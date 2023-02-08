@@ -9,6 +9,7 @@ import torch.nn.functional as F
 
 from .dataset import DatasetBatch
 from .tokenizer import MIDITokenizer
+from .ngram import get_lexicon_size
 
 
 class CompoundTokenFuser(nn.Module):
@@ -67,6 +68,29 @@ class CompoundTokenFuser(nn.Module):
         return torch.split(embeddings, self.field_sizes, dim=2)
 
 
+class NgramClassificationHead(nn.Module):
+    """Extra classification head placed after transformer encoder, used for n-gram prediction."""
+
+    def __init__(self, model_dim: int, ngram_size: Tuple[int, int]) -> None:
+        super().__init__()
+        self.model_dim = model_dim
+        self.pitch_size, self.rhythm_size = ngram_size
+
+        self.pitch_classifier = nn.Linear(model_dim, self.pitch_size)
+        self.rhythm_classifier = nn.Linear(model_dim, self.rhythm_size)
+
+    def forward(self, outputs: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Args:
+            outputs: (batch_size, seq_len, model_dim), transformer encoder outputs
+        Returns:
+            pitch_logits: (batch_size, seq_len, pitch_size)
+            rhythm_logits: (batch_size, seq_len, rhythm_size)
+        """
+        pitch_logits = self.pitch_classifier(outputs)
+        rhythm_logits = self.rhythm_classifier(outputs)
+        return pitch_logits, rhythm_logits
+
+
 class MelodyModel(pl.LightningModule):
     """Base model for core step logic."""
 
@@ -108,19 +132,27 @@ class MelodyModel(pl.LightningModule):
         )
 
     def forward(
-        self, x: torch.Tensor, padding_mask: Optional[torch.Tensor] = None, attn_mask: Optional[torch.Tensor] = None
-    ) -> torch.Tensor:
+        self,
+        x: torch.Tensor,
+        padding_mask: Optional[torch.Tensor] = None,
+        attn_mask: Optional[torch.Tensor] = None,
+        return_outputs: bool = False,
+    ) -> List[torch.Tensor]:
         """Args:
             x: (batch_size, seq_len, num_features)
             padding_mask: (batch_size, seq_len), optional
             attn_mask: (batch_size, seq_len, seq_len), optional
+            return_outputs: bool, whether to return transformer encoder outputs
         Returns:
-            x: list of num_features * (batch_size, seq_len, vocab_size of the feature)
+            decoded: list of num_features * (batch_size, seq_len, vocab_size of the feature)
+            outputs: (batch_size, seq_len, model_dim), transformer encoder outputs
         """
         x = self.fuser(x)
-        x = self.transformer_encoder(x, src_key_padding_mask=padding_mask, mask=attn_mask)
-        x = self.fuser.decode(x)
-        return x
+        outputs = self.transformer_encoder(x, src_key_padding_mask=padding_mask, mask=attn_mask)
+        decoded = self.fuser.decode(outputs)
+        if return_outputs:
+            return decoded, outputs
+        return decoded
 
     def _get_loss(
         self, logits: List[torch.Tensor], label_ids: torch.Tensor, return_parts: bool = False
@@ -137,31 +169,22 @@ class MelodyModel(pl.LightningModule):
             return loss, losses
         return loss
 
-    def _shared_step(self, batch: DatasetBatch) -> List[torch.Tensor]:
+    def _shared_step(self, batch: DatasetBatch, return_outputs: bool = False) -> List[torch.Tensor]:
+        """Args:
+            batch: DatasetBatch
+            return_outputs: bool, whether to return transformer encoder outputs
+        Returns:
+            decoded: list of num_features * (batch_size, seq_len, vocab_size of the feature)
+            outputs: (batch_size, seq_len, model_dim), transformer encoder outputs
+        """
         batch_size, seq_len, _ = batch.input_ids.shape
-        input_ids, _, padding_mask, attention_mask = batch
+        attention_mask = batch.attention_mask
         if attention_mask is not None and len(attention_mask.shape) == 3:
             # attention_mask: (batch_size * num_heads, seq_len, seq_len)
             attention_mask = attention_mask.expand(self.num_heads, -1, -1, -1).reshape(
                 self.num_heads * batch_size, seq_len, seq_len
             )
-        logits = self(input_ids, padding_mask, attention_mask)
-        return logits
-
-    def training_step(self, batch: DatasetBatch, batch_idx: int) -> torch.Tensor:
-        logits = self._shared_step(batch)
-        loss, losses = self._get_loss(logits, batch.label_ids, return_parts=True)
-        self.log("train_loss", loss, prog_bar=True, sync_dist=True)
-        self.log_dict(
-            {f"train_loss:{self.tokenizer.field_names[i]}": loss for i, loss in enumerate(losses)}, sync_dist=True
-        )
-        return loss
-
-    def validation_step(self, batch: DatasetBatch, batch_idx: int) -> torch.Tensor:
-        logits = self._shared_step(batch)
-        loss = self._get_loss(logits, batch.label_ids)
-        self.log("val_loss", loss, sync_dist=True)
-        return loss
+        return self(batch.input_ids, batch.padding_mask, attention_mask, return_outputs=return_outputs)
 
 
 class MelodyPretrainModel(MelodyModel):
@@ -183,6 +206,9 @@ class MelodyPretrainModel(MelodyModel):
         betas: Tuple[float, float],
         weight_decay: float,
         warmup_percent: float,
+        # Training configuration
+        ngram_classification: bool = False,
+        ngram_classification_weight: float = 0.25,
         **kwargs,
     ) -> None:
         super().__init__(
@@ -200,6 +226,14 @@ class MelodyPretrainModel(MelodyModel):
         self.weight_decay = weight_decay
         self.warmup_percent = warmup_percent
 
+        self.ngram_classification = ngram_classification
+        self.ngram_classification_weight = ngram_classification_weight
+        if ngram_classification:
+            # Check the size of ngram vocabulary
+            lexicon_path = os.path.join(dataset_dir, "ngram_data", "lexicon.pkl")
+            self.pitch_size, self.rhythm_size = get_lexicon_size(lexicon_path)
+            self.ngram_head = NgramClassificationHead(model_dim, ngram_size=(self.pitch_size, self.rhythm_size))
+
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr, betas=self.betas, weight_decay=self.weight_decay)
         lr_scheduler = torch.optim.lr_scheduler.OneCycleLR(
@@ -211,6 +245,69 @@ class MelodyPretrainModel(MelodyModel):
         )
         scheduler = {"scheduler": lr_scheduler, "interval": "step"}
         return [optimizer], [scheduler]
+
+    def ngram_classification_step(
+        self, logits: torch.Tensor, label_ids: torch.Tensor, ngram_types: List[str]
+    ) -> torch.Tensor:
+        """Args:
+        logits: (batch_size, seq_len, model_dim)
+        label_ids: (batch_size, seq_len)
+        ngram_types: list of ngram types, each be either "pitch" or "rhythm"
+        """
+        batch_size, seq_len, _ = logits.shape
+        assert len(ngram_types) == batch_size, "ngram_types must be a list of length batch_size"
+        assert label_ids.shape == (batch_size, seq_len), "label_ids must be of shape (batch_size, seq_len)"
+        pitch_logits, rhythm_logits = self.ngram_head(logits)
+
+        pitch_indices = [i for i, ngram_type in enumerate(ngram_types) if ngram_type == "pitch"]
+        rhythm_indices = [i for i, ngram_type in enumerate(ngram_types) if ngram_type == "rhythm"]
+        # extract corresponding ngram types
+        pitch_logits = pitch_logits[pitch_indices]
+        pitch_label_ids = label_ids[pitch_indices]
+        rhythm_logits = rhythm_logits[rhythm_indices]
+        rhythm_label_ids = label_ids[rhythm_indices]
+
+        # (batch_size, seq_len, vocab_size) -> (batch_size, vocab_size, seq_len)
+        # use reduction="sum" to avoid averaging over the batch
+        pitch_loss = F.cross_entropy(pitch_logits.transpose(1, 2), pitch_label_ids, reduction="sum")
+        rhythm_loss = F.cross_entropy(rhythm_logits.transpose(1, 2), rhythm_label_ids, reduction="sum")
+        # average over the number of non-padding tokens
+        count = torch.count_nonzero(pitch_label_ids != -100) + torch.count_nonzero(rhythm_label_ids != -100)
+        return (pitch_loss + rhythm_loss) / count
+
+    def training_step(self, batch: DatasetBatch, batch_idx: int) -> torch.Tensor:
+        batch_size = len(batch.input_ids)
+        logits, outputs = self._shared_step(batch, return_outputs=True)
+        loss, losses = self._get_loss(logits, batch.label_ids, return_parts=True)
+
+        if self.ngram_classification and batch.extra_label_ids is not None and batch.ngram_types is not None:
+            ngram_classification_loss = self.ngram_classification_step(
+                outputs, batch.extra_label_ids, batch.ngram_types
+            )
+            loss += ngram_classification_loss * self.ngram_classification_weight
+            self.log("train_loss:ngram", ngram_classification_loss, sync_dist=True, batch_size=batch_size)
+
+        self.log("train_loss", loss, prog_bar=True, sync_dist=True, batch_size=batch_size)
+        self.log_dict(
+            {f"train_loss:{self.tokenizer.field_names[i]}": loss for i, loss in enumerate(losses)},
+            sync_dist=True,
+            batch_size=batch_size,
+        )
+        return loss
+
+    def validation_step(self, batch: DatasetBatch, batch_idx: int) -> torch.Tensor:
+        batch_size = len(batch.input_ids)
+        logits, outputs = self._shared_step(batch, return_outputs=True)
+        loss = self._get_loss(logits, batch.label_ids)
+
+        if self.ngram_classification and batch.extra_label_ids is not None and batch.ngram_types is not None:
+            ngram_classification_loss = self.ngram_classification_step(
+                outputs, batch.extra_label_ids, batch.ngram_types
+            )
+            loss += ngram_classification_loss * self.ngram_classification_weight
+
+        self.log("val_loss", loss, sync_dist=True, batch_size=batch_size)
+        return loss
 
 
 class MelodyTestingModel(MelodyModel):
@@ -249,10 +346,9 @@ class MelodyTestingModel(MelodyModel):
         """Calculate strided fixed-length perplexity for CLM model.
         Reference: https://huggingface.co/docs/transformers/perplexity
         """
-        input_ids, label_ids, padding_mask, attention_mask = batch
-        _, seq_len, _ = input_ids.shape
+        _, seq_len, _ = batch.input_ids.shape
         assert (
-            len(attention_mask.shape) == 2
+            len(batch.attention_mask.shape) == 2
         ), "Only support calculating perplexity for CLM model, where attention mask should be 2D."
 
         nlls = []
@@ -262,13 +358,13 @@ class MelodyTestingModel(MelodyModel):
             target_length = end_index - previous_end_index
 
             # Mask out context tokens for labels
-            new_label_ids = label_ids[:, start_index:end_index, :].clone()
+            new_label_ids = batch.label_ids[:, start_index:end_index, :].clone()
             new_label_ids[:, :-target_length] = self.pad_token_tensor.to(new_label_ids.device)
             new_batch = DatasetBatch(
-                input_ids=input_ids[:, start_index:end_index, :],
+                input_ids=batch.input_ids[:, start_index:end_index, :],
                 label_ids=new_label_ids,
-                padding_mask=padding_mask[:, start_index:end_index],
-                attention_mask=attention_mask[start_index:end_index, start_index:end_index],
+                padding_mask=batch.padding_mask[:, start_index:end_index],
+                attention_mask=batch.attention_mask[start_index:end_index, start_index:end_index],
             )
             logits = self._shared_step(new_batch)
             loss = self._get_loss(logits, new_batch.label_ids)
@@ -318,7 +414,7 @@ class MelodyCompletionModel(MelodyModel):
         self.top_k = top_k
 
     def predict_step(self, batch: DatasetBatch, batch_idx: int, dataloader_idx: int = 0) -> torch.Tensor:
-        input_ids, _, _, _ = batch
+        input_ids = batch.input_ids
         batch_size, _, _ = input_ids.shape
         assert batch_size == 1, "Only support batch size of 1 for prediction for now"
 
@@ -396,7 +492,7 @@ class MelodyInfillingModel(MelodyModel):
         self.sep_token = torch.from_numpy(self.tokenizer.sep_token_ids)
 
     def predict_step(self, batch: DatasetBatch, batch_idx: int, dataloader_idx: int = 0) -> torch.Tensor:
-        input_ids, _, _, _ = batch
+        input_ids = batch.input_ids
         batch_size, original_len, _ = input_ids.shape
         assert batch_size == 1, "Only support batch size of 1 for prediction for now"
 

@@ -387,6 +387,15 @@ def group_ngram_dict(ngram_dict: dict):
     return grouped_ngram_dict
 
 
+def get_lexicon_size(lexicon_path: str):
+    """Get lexicon size from a lexicon file."""
+    with open(lexicon_path, "rb") as f:
+        lexicon = pickle.load(f)
+        pitch_size = len(lexicon["pitch"])
+        rhythm_size = len(lexicon["rhythm"])
+    return pitch_size, rhythm_size
+
+
 def transpose_pitches(pitches: tuple):
     """Transpose pitches to a key where there are least accidentals.
     This is utility function for visualize n-grams."""
