@@ -223,25 +223,43 @@ def prepare_lexicon(data_dir: str, top_p: float):
         print(f"preparing lexicon for {path}...")
         with open(path, "rb") as f:
             ngram_dict = pickle.load(f)
-        k = int(top_p * len(ngram_dict))
-        top_ngram_dict = get_top_k_ngrams(ngram_dict, k)
-        # label by index
-        for i, ngram in enumerate(top_ngram_dict):
-            top_ngram_dict[ngram] = i
-        return top_ngram_dict
+        
+        grouped_ngram_dict = group_ngram_dict(ngram_dict)
+        ngram_lengths = sorted(grouped_ngram_dict.keys())
+        ngram_range = range(ngram_lengths[0], ngram_lengths[-1] + 1)
+    
+        # determine probabilities for each ngram length by Poisson distribution
+        def poisson_prob(lam, k):
+            return lam ** k * np.exp(-lam) / math.factorial(k)
+        probs = [poisson_prob(ngram_range.start, k) for k in ngram_range]
+        # fix probs so that the ratio of selected is equal to top_p
+        counts = [len(grouped_ngram_dict[k]) for k in ngram_range]
+        selected_counts = [int(p * c) for p, c in zip(probs, counts)]
+        ratio = sum(selected_counts) / sum(counts)
+        probs = [p / ratio * top_p for p in probs]
 
-    pitch_ngram_dict = prepare_ngram_dict(os.path.join(data_dir, "ngram_pitch.pkl"))
-    rhythm_ngram_dict = prepare_ngram_dict(os.path.join(data_dir, "ngram_rhythm.pkl"))
+        # select top ngrams for each length
+        for i, length in enumerate(ngram_range):
+            original_count = len(grouped_ngram_dict[length])
+            k = int(probs[i] * original_count)
+            grouped_ngram_dict[length] = get_top_k_ngrams(grouped_ngram_dict[length], k)
+            print(f"{length}-gram: {original_count} * {probs[i]:.2%} = {len(grouped_ngram_dict[length])}")
+        
+        # merge dict
+        ngram_dict = {}
+        for length in ngram_range:
+            ngram_dict.update(grouped_ngram_dict[length])
+        ngram_dict = sorted_ngram_dict(ngram_dict)
 
-    # get ngram length range
-    pitch_ngram_lengths = set(len(ngram) for ngram in pitch_ngram_dict)
-    rhythm_ngram_lengths = set(len(ngram) for ngram in rhythm_ngram_dict)
-    ngram_lengths = sorted(pitch_ngram_lengths | rhythm_ngram_lengths)
-    ngram_range = range(ngram_lengths[0], ngram_lengths[-1] + 1)
-    print(f"ngram lengths: {ngram_lengths}")
+        print("total ngrams:", len(ngram_dict))
+        return ngram_dict, ngram_range
+
+
+    pitch_ngram_dict, ngram_range = prepare_ngram_dict(os.path.join(data_dir, "ngram_pitch.pkl"))
+    rhythm_ngram_dict, ngram_range = prepare_ngram_dict(os.path.join(data_dir, "ngram_rhythm.pkl"))
+    print("ngram range:", ngram_range)
 
     lexicon = {"pitch": pitch_ngram_dict, "rhythm": rhythm_ngram_dict, "ngram_range": ngram_range}
-
     dest_path = os.path.join(data_dir, "lexicon.pkl")
     print(f"saving lexicon to {dest_path}...")
     with open(dest_path, "wb") as f:
@@ -373,9 +391,15 @@ def get_ngram_count_dict(ngram_prob_dict: dict):
     return count_dict
 
 
-def get_top_k_ngrams(ngram_dict: dict, k: int):
-    """Get top k ngrams with highest score. Sort by score first, then by length, then by ngram."""
+def sorted_ngram_dict(ngram_dict: dict):
+    """Sort ngram dict by score, then by length, then by ngram."""
     items = sorted(ngram_dict.items(), key=lambda x: (-x[1], -len(x[0]), x[0]))
+    return dict(items)
+
+
+def get_top_k_ngrams(ngram_dict: dict, k: int):
+    """Get top k ngrams with highest score."""
+    items = list(sorted_ngram_dict(ngram_dict).items())
     return dict(items[:k])
 
 
