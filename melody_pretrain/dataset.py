@@ -10,7 +10,8 @@ from torch.utils.data import DataLoader, Dataset
 from .tokenizer import MIDITokenizer
 
 
-default_padding_index_for_classification = -100
+# Pytorch default padding index is -100, used for ngram classification and position embedding
+default_padding_index = -100
 
 
 class DatasetItem(NamedTuple):
@@ -18,15 +19,19 @@ class DatasetItem(NamedTuple):
     extra_data: Dict[str, np.ndarray]
 
 
-class InfillingMaskedDataPair(NamedTuple):
+class InfillingData(NamedTuple):
     """Used for text infilling, the data is a pair of (masked data, target).
     Allow extra data to be attached to the data pair.
     """
 
-    masked_data: np.ndarray
-    target: np.ndarray
-    extra_label_ids: Optional[np.ndarray] = None
+    sources: List[np.ndarray]
+    targets: List[np.ndarray]
+    target_span_indices: List[int]
+
     ngram_type: Optional[str] = None
+    ngram_ids: Optional[List[int]] = None
+
+    field_padding_indices: Optional[List[int]] = None
 
 
 class DatasetBatch(NamedTuple):
@@ -37,8 +42,11 @@ class DatasetBatch(NamedTuple):
     label_ids: torch.Tensor
     padding_mask: torch.Tensor
     attention_mask: Optional[torch.Tensor] = None
-    extra_label_ids: Optional[torch.Tensor] = None
+
     ngram_types: Optional[List[str]] = None
+    ngram_ids: Optional[torch.Tensor] = None
+
+    span_indices: Optional[torch.Tensor] = None
 
 
 class Masking:
@@ -131,7 +139,7 @@ class Masking:
 
 
 class InfillingMasking(Masking):
-    def mask_for_infilling(self, data: np.ndarray, **kwargs) -> InfillingMaskedDataPair:
+    def mask_for_infilling(self, data: np.ndarray, **kwargs) -> InfillingData:
         raise NotImplementedError
 
 
@@ -154,7 +162,7 @@ class MultiTargetInfillingMasking(InfillingMasking):
         masking = self.maskings[index]
         return masking.mask(data, **kwargs)
 
-    def mask_for_infilling(self, data: np.ndarray, **kwargs) -> InfillingMaskedDataPair:
+    def mask_for_infilling(self, data: np.ndarray, **kwargs) -> InfillingData:
         index = np.random.choice(len(self.maskings), p=self.probabilities)
         masking = self.maskings[index]
         return masking.mask_for_infilling(data, **kwargs)
@@ -226,19 +234,18 @@ class SingleSpanMasking(InfillingMasking):
         noise_spans = [[self._get_random_span(length)] for length in lengths]
         return self._mask_batch_with_noise_spans(inputs, noise_spans)
 
-    def mask_for_infilling(self, data: np.ndarray, **kwargs) -> InfillingMaskedDataPair:
+    def mask_for_infilling(self, data: np.ndarray, **kwargs) -> InfillingData:
         """Mask data with single span for infilling. Put a single mask token for the span.
         Args:
             data: (seq_len, num_features)
-        Returns:
-            masked_data: (masked_seq_len, num_features), with form of {tokens, [MASK], tokens}
-            target: (infilling_seq_len, num_features), with form of {<SEP>, tokens}
         """
         seq_len, _ = data.shape
         start, end = self._get_random_span(seq_len)
-        masked_data = np.concatenate((data[:start], [self.tokenizer.mask_token_ids], data[end:]))
-        target = np.concatenate(([self.tokenizer.sep_token_ids], data[start:end]))
-        return InfillingMaskedDataPair(masked_data, target)
+        sources = [data[:start], data[end:]]
+        targets = [data[start:end]]
+        # target span index is always 1, since the sequence is {source, target, source}
+        target_span_indices = [1]
+        return InfillingData(sources, targets, target_span_indices)
 
 
 class RandomSpanMasking(InfillingMasking):
@@ -304,28 +311,25 @@ class RandomSpanMasking(InfillingMasking):
         noise_spans = [self._get_random_spans(length)[1::2] for length in lengths]
         return self._mask_batch_with_noise_spans(inputs, noise_spans)
 
-    def mask_for_infilling(self, data: np.ndarray, **kwargs) -> InfillingMaskedDataPair:
+    def mask_for_infilling(self, data: np.ndarray, **kwargs) -> InfillingData:
         """Mask data with random spans for infilling. Put a single mask token for each span. (T5-style)
         Args:
             data: (seq_len, num_features)
-        Returns:
-            masked_data: (masked_seq_len, num_features), with form of {tokens, [MASK], ...}
-            target: (infilling_seq_len, num_features), with form of {<SEP>, tokens, ...}
         """
         seq_len, _ = data.shape
         spans = self._get_random_spans(seq_len)
         # Collect masked data and target data. Maybe there is a better way to do this.
-        masked_data, target = [], []
+        sources, targets = [], []
+        target_span_indices = []
         for i, (start, end) in enumerate(spans):
             if i % 2 == 0:
                 # non-noise span
-                masked_data += [data[start:end], [self.tokenizer.mask_token_ids]]
+                sources.append(data[start:end])
             else:
                 # noise span
-                target += [[self.tokenizer.sep_token_ids], data[start:end]]
-        masked_data = np.concatenate(masked_data)
-        target = np.concatenate(target)
-        return InfillingMaskedDataPair(masked_data, target)
+                targets.append(data[start:end])
+                target_span_indices.append(i)
+        return InfillingData(sources, targets, target_span_indices)
 
 
 class RandomBarMasking(InfillingMasking):
@@ -400,33 +404,29 @@ class RandomBarMasking(InfillingMasking):
         label[~mask_indices] = self.tokenizer.pad_token_ids
         return data, label
 
-    def mask_for_infilling(self, data: np.ndarray, offset: int, **kwargs) -> InfillingMaskedDataPair:
+    def mask_for_infilling(self, data: np.ndarray, offset: int, **kwargs) -> InfillingData:
         """Mask data with random bars for infilling. Put a single mask token for each bar.
         Args:
             data: (seq_len, num_features)
             bar_spans: (num_bars, 2) array of (start, end) indices
             offset: offset of data in the original sequence, in case random cropping is used
-        Returns:
-            masked_data: (masked_seq_len, num_features), with form of {tokens, [MASK], ...}
-            target: (infilling_seq_len, num_features), with form of {<SEP>, tokens, ...}
         """
         seq_len, _ = data.shape
         bar_spans = kwargs[self.extra_data_field_name]
         bar_spans = self._process_bar_spans(bar_spans, offset, offset + seq_len)
         noise_bars = self._get_random_noise_bars(bar_spans, seq_len)
 
-        masked_data, target = [], []
+        sources, targets = [], []
+        target_span_indices = []
         for i, (start, end) in enumerate(bar_spans):
             if noise_bars[i]:
                 # noise bar
-                masked_data += [[self.tokenizer.mask_token_ids]]
-                target += [[self.tokenizer.sep_token_ids], data[start:end]]
+                targets.append(data[start:end])
+                target_span_indices.append(i)
             else:
                 # non-noise bar
-                masked_data += [data[start:end]]
-        masked_data = np.concatenate(masked_data)
-        target = np.concatenate(target)
-        return InfillingMaskedDataPair(masked_data, target)
+                sources.append(data[start:end])
+        return InfillingData(sources, targets, target_span_indices)
 
 
 class FixedBarMasking(RandomBarMasking):
@@ -464,7 +464,7 @@ class FixedBarMasking(RandomBarMasking):
         future_end = bar_spans[start_bar_index + self.num_total_bars - 1, 1]
         return past_start, past_end, future_start, future_end
 
-    def mask_for_infilling(self, data: np.ndarray, **kwargs) -> InfillingMaskedDataPair:
+    def mask_for_infilling(self, data: np.ndarray, **kwargs) -> InfillingData:
         """Mask data with fixed noise bars based on given numbers of past, masking and future bars.
         Random cropping should be handled here rather than in the data collator.
         Args:
@@ -480,9 +480,11 @@ class FixedBarMasking(RandomBarMasking):
         past = data[past_start:past_end]
         future = data[future_start:future_end]
         middle = data[past_end:future_start]
-        masked_data = np.concatenate([past, [self.tokenizer.mask_token_ids], future])
-        target = np.concatenate([[self.tokenizer.sep_token_ids], middle])
-        return InfillingMaskedDataPair(masked_data, target)
+        sources = [past, future]
+        targets = [middle]
+        # target span index is always 1, since the sequence is {past, middle, future}
+        target_span_indices = [1]
+        return InfillingData(sources, targets, target_span_indices)
 
 
 class RandomNgramMasking(InfillingMasking):
@@ -493,17 +495,11 @@ class RandomNgramMasking(InfillingMasking):
         corruption_rate: float = 0.15,
         extra_data_field_name: str = "ngrams",
         fallback_mean_span_length: int = 3,
-        field_specific_masking: bool = False,
-        return_ngram_ids: bool = False,
     ):
         """Args:
         corruption_rate: corruption rate of ngram masking.
         extra_data_field_name: name of the extra data field containing ngram spans, `pitch_ngrams` or `rhythm_ngrams`.
         fallback_mean_span_length: mean span length for random span method when ngrams are not available.
-        field_specific_masking: whether to use field-specific masking.
-            If ngrams are of pitch, only `bar` and `pitch` fields will be masked.
-            If ngrams are of rhythm, only `bar`, `position` and `duration` fields will be masked.
-        return_ngram_ids: whether to return ngram ids.
         """
         super().__init__()
         self.corruption_rate = corruption_rate
@@ -511,28 +507,27 @@ class RandomNgramMasking(InfillingMasking):
 
         self.random_span_masking = RandomSpanMasking(corruption_rate, fallback_mean_span_length)
 
-        self.field_specific_masking = field_specific_masking
-
-        self.return_ngram_ids = return_ngram_ids
         self.ngram_type = "pitch" if self.extra_data_field_name == "pitch_ngrams" else "rhythm"
 
     def setup_tokenizer(self, tokenizer: MIDITokenizer):
         super().setup_tokenizer(tokenizer)
         self.random_span_masking.setup_tokenizer(tokenizer)
-        self.bar_field_index = self.tokenizer.field_indices["bar"]
-        self.position_field_index = self.tokenizer.field_indices["position"]
-        self.duration_field_index = self.tokenizer.field_indices["duration"]
-        self.pitch_field_index = self.tokenizer.field_indices["pitch"]
+        position_field_index = self.tokenizer.field_indices["position"]
+        duration_field_index = self.tokenizer.field_indices["duration"]
+        pitch_field_index = self.tokenizer.field_indices["pitch"]
+
+        # bar, pitch
+        self.pitch_ngram_padding_indices = [position_field_index, duration_field_index]
+        # bar, position, duration
+        self.rhythm_ngram_padding_indices = [pitch_field_index]
 
     def _process_ngram_spans(self, ngram_spans: np.ndarray, start: int, end: int) -> np.ndarray:
         """Pick ngram spans within given range and shift them to start from 0."""
         starts = ngram_spans[:, 0]
         ends = ngram_spans[:, 0] + ngram_spans[:, 1]
         ngram_spans = ngram_spans[(starts >= start) & (ends <= end)]
-
-        result = ngram_spans.copy()
-        result[:, 0] -= start
-        return result
+        ngram_spans[:, 0] -= start
+        return ngram_spans
 
     def _get_random_noise_ngrams(self, num_tokens: int, ngrams: np.ndarray) -> np.ndarray:
         """Get random ngrams.
@@ -540,7 +535,7 @@ class RandomNgramMasking(InfillingMasking):
             length: length of sequence
             ngrams: (num_ngrams, 3) array of (start, length, id)
         Returns:
-            noise_ngrams: (num_ngrams) bool array, where True means noise ngram.
+            noise_ngram_indices: list of int, indices of noise ngrams
             has_enough_noise_ngrams: whether there are enough noise ngrams.
         """
         if len(ngrams) == 0:
@@ -550,23 +545,23 @@ class RandomNgramMasking(InfillingMasking):
         num_noise_tokens = min(max(num_noise_tokens, 1), num_tokens - 1)
 
         # Randomly select noise ngrams
-        shuffled_ngrams = ngrams.copy()
-        np.random.shuffle(shuffled_ngrams)
+        permutation = np.random.permutation(len(ngrams))
 
         current_noise_tokens = 0
         covered_indices = np.zeros(num_tokens, dtype=bool)
-        noise_ngrams = np.zeros(len(ngrams), dtype=bool)
-        for i, (start, length, _) in enumerate(shuffled_ngrams):
+        noise_ngram_indices = []
+        for index in permutation:
+            start, length, _ = ngrams[index]
             if current_noise_tokens >= num_noise_tokens:
                 break
-            if covered_indices[start : start + length].any():
+            if np.any(covered_indices[start : start + length]):
                 continue
-            noise_ngrams[i] = True
+            noise_ngram_indices.append(index)
             covered_indices[start : start + length] = True
             current_noise_tokens += length
-        
+
         has_enough_noise_ngrams = current_noise_tokens >= num_noise_tokens
-        return noise_ngrams, has_enough_noise_ngrams
+        return noise_ngram_indices, has_enough_noise_ngrams
 
     def mask(self, data: np.ndarray, offset: int, **kwargs) -> Tuple[np.ndarray, np.ndarray]:
         """Mask data with random n-grams.
@@ -578,19 +573,19 @@ class RandomNgramMasking(InfillingMasking):
             masked_data: (seq_len, num_features)
             label: (seq_len, num_features)
         """
+        # TODO: Use BERT-style masking.
+        seq_len, _ = data.shape
+        label = data.copy()
+
         ngrams = kwargs[self.extra_data_field_name]
         ngrams = self._process_ngram_spans(ngrams, offset, offset + seq_len)
-        noise_ngrams, has_enough_noise_ngrams = self._get_random_noise_ngrams(seq_len, ngrams)
+        noise_ngram_indices, has_enough_noise_ngrams = self._get_random_noise_ngrams(seq_len, ngrams)
 
         # If there are not enough ngrams, fallback to random span masking instead.
         if not has_enough_noise_ngrams:
             # TODO: Yet to implement single random span masking.
             return self.random_span_masking.mask(data)
-        
-        # TODO: Use BERT-style masking.
-        noise_ngram_spans = ngrams[noise_ngrams]
-        label = data.copy()
-        seq_len, _ = data.shape
+        noise_ngram_spans = ngrams[noise_ngram_indices]
 
         mask_indices = np.zeros(seq_len, dtype=bool)
         for start, length, _ in noise_ngram_spans:
@@ -600,56 +595,60 @@ class RandomNgramMasking(InfillingMasking):
         label[~mask_indices] = self.tokenizer.pad_token_ids
         return data, label
 
-    def mask_for_infilling(self, data: np.ndarray, offset: int, **kwargs) -> InfillingMaskedDataPair:
+    def mask_for_infilling(self, data: np.ndarray, offset: int, **kwargs) -> InfillingData:
         """Mask data with random n-grams. Put a single mask token for each n-gram.
         Args:
             data: (seq_len, num_features)
             ngrams: (num_ngrams, 3) array of (start, length, id)
             offset: offset of data in the original sequence, in case random cropping is used
-        Returns:
-            masked_data: (masked_seq_len, num_features), with form of {tokens, [MASK], ...}
-            target: (infilling_seq_len, num_features), with form of {<SEP>, tokens, ...}
         """
         seq_len, _ = data.shape
         ngrams = kwargs[self.extra_data_field_name]
         ngrams = self._process_ngram_spans(ngrams, offset, offset + seq_len)
-        noise_ngrams, has_enough_noise_ngrams = self._get_random_noise_ngrams(seq_len, ngrams)
+        noise_ngram_indices, has_enough_noise_ngrams = self._get_random_noise_ngrams(seq_len, ngrams)
 
         # If there are not enough ngrams, fallback to random span masking instead.
         if not has_enough_noise_ngrams:
             return self.random_span_masking.mask_for_infilling(data)
-        
-        noise_ngram_spans = ngrams[noise_ngrams]
+
         # Sort by start index
+        noise_ngram_spans = ngrams[noise_ngram_indices]
         noise_ngram_spans = noise_ngram_spans[np.argsort(noise_ngram_spans[:, 0])]
 
-        # TODO: Maybe add specific field masking.
-
         # Build masked data and target
-        masked_data, target = [], []
-        for i, (start, length, _) in enumerate(noise_ngram_spans):
+        sources, targets = [], []
+        target_span_indices = []
+        ngram_ids = []
+        num_span = 0
+        for i, (start, length, ngram_id) in enumerate(noise_ngram_spans):
             previous_end = noise_ngram_spans[i - 1, 0] + noise_ngram_spans[i - 1, 1] if i > 0 else 0
-            masked_data += [data[previous_end:start], [self.tokenizer.mask_token_ids]]
-            target += [[self.tokenizer.sep_token_ids], data[start : start + length]]
-        # add the last part
-        masked_data += [data[previous_end:]]
-        masked_data = np.concatenate(masked_data)
-        target = np.concatenate(target)
+            if start > previous_end:
+                sources.append(data[previous_end:start])
+                targets.append(data[start : start + length])
+                target_span_indices.append(num_span + 1)
+                ngram_ids.append(ngram_id)
+                num_span += 2
+            elif start == previous_end:
+                # this ngram is adjacent to the previous one
+                targets.append(data[start : start + length])
+                target_span_indices.append(num_span)
+                ngram_ids.append(ngram_id)
+                num_span += 1
+            else:
+                raise RuntimeError("ngrams are overlapping")
 
-        # Build ngram ids if needed
-        if self.return_ngram_ids:
-            ngram_ids = np.ones(len(masked_data), dtype=np.int64) * default_padding_index_for_classification
-            current_position = 0
-            for i, (start, _, ngram_id) in enumerate(noise_ngram_spans):
-                previous_end = noise_ngram_spans[i - 1, 0] + noise_ngram_spans[i - 1, 1] if i > 0 else 0
-                current_position += start - previous_end
-                ngram_ids[current_position] = ngram_id
-                current_position += 1
+        # field padding indices
+        field_padding_indices = (
+            self.pitch_ngram_padding_indices if self.ngram_type == "pitch" else self.rhythm_ngram_padding_indices
+        )
 
-        return (
-            InfillingMaskedDataPair(masked_data, target, ngram_ids, self.ngram_type)
-            if self.return_ngram_ids
-            else InfillingMaskedDataPair(masked_data, target)
+        return InfillingData(
+            sources,
+            targets,
+            target_span_indices,
+            ngram_type=self.ngram_type,
+            ngram_ids=ngram_ids,
+            field_padding_indices=field_padding_indices,
         )
 
 
@@ -725,17 +724,13 @@ class DataCollatorForPaddingOnly(DataCollator):
         # TODO: Consider right side padding for batch inference?
         data_list = [item.data for item in batch]
         data_list, _ = self.truncate(data_list, self.seq_len)
-        data_list = self.pad(data_list, self.seq_len)
-        input_ids = np.stack(data_list, axis=0)
-        _, seq_len, _ = input_ids.shape
-        input_ids = torch.tensor(input_ids, dtype=torch.long)
+        input_ids = np.stack(self.pad(data_list, self.seq_len), axis=0)
+        input_ids = torch.from_numpy(input_ids).long()
         padding_mask = torch.tensor(
-            [[0] * len(data) + [1] * (seq_len - len(data)) for data in data_list], dtype=torch.bool
+            [[0] * len(data) + [1] * (self.seq_len - len(data)) for data in data_list], dtype=torch.bool
         )
-        label_ids = None
-        attention_mask = None
 
-        return DatasetBatch(input_ids, label_ids, padding_mask, attention_mask)
+        return DatasetBatch(input_ids, label_ids=None, padding_mask=padding_mask)
 
 
 class DataCollatorForInfilling(DataCollator):
@@ -754,16 +749,17 @@ class DataCollatorForInfilling(DataCollator):
         data_list = [item.data for item in batch]
         extra_data_list = [item.extra_data for item in batch]
         # Only collect masked data
-        data_list = [
-            self.masking.mask_for_infilling(data, **extra_data).masked_data
-            for data, extra_data in zip(data_list, extra_data_list)
-        ]
-        data_list = self.pad(data_list)
-        input_ids = np.stack(data_list, axis=0)
+        masked_data_list = []
+        for data, extra_data in zip(data_list, extra_data_list):
+            sources = self.masking.mask_for_infilling(data, **extra_data).sources
+            assert len(sources) == 2, "Fixed bar masking should generate past and future spans."
+            masked_data = np.concatenate([sources[0], [self.tokenizer.mask_token_ids], sources[1]], axis=0)
+            masked_data_list.append(masked_data)
+        input_ids = np.stack(self.pad(masked_data_list), axis=0)
+        input_ids = torch.from_numpy(input_ids).long()
         _, seq_len, _ = input_ids.shape
-        input_ids = torch.tensor(input_ids, dtype=torch.long)
         padding_mask = torch.tensor(
-            [[0] * len(data) + [1] * (seq_len - len(data)) for data in data_list], dtype=torch.bool
+            [[0] * len(data) + [1] * (seq_len - len(masked_data)) for masked_data in masked_data_list], dtype=torch.bool
         )
 
         return DatasetBatch(input_ids, label_ids=None, padding_mask=padding_mask)
@@ -833,55 +829,144 @@ class DataCollatorForMaskedLanguageModeling(DataCollator):
 
 
 class DataCollatorForPrefixMaskedLanguageModeling(DataCollator):
-    def __init__(self, masking: InfillingMasking, seq_len: Optional[int] = None, random_crop: bool = False):
+    def __init__(
+        self,
+        masking: InfillingMasking,
+        seq_len: Optional[int] = None,
+        random_crop: bool = False,
+        permutated_infilling: bool = False,
+        span_independent_infilling: bool = False,
+        ngram_classification: bool = False,
+        ngram_field_specific_masking: bool = False,
+    ):
         super().__init__(seq_len, random_crop)
         self.masking = masking
+        self.permutated_infilling = permutated_infilling
+        self.span_independent_infilling = span_independent_infilling
+        self.ngram_classification = ngram_classification
+        self.ngram_field_specific_masking = ngram_field_specific_masking
 
     def setup_tokenizer(self, tokenizer: MIDITokenizer):
         super().setup_tokenizer(tokenizer)
         self.masking.setup_tokenizer(tokenizer)
 
-    def _get_input_and_label(self, masked_data: np.ndarray, target: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-        """Get input and label for infilling.
-        Args:
-            masked_data: (masked_seq_len, num_features)
-            target: (infilling_seq_len, num_features)
-        Returns:
-            input: (masked_seq_len + infilling_seq_len, num_features)
-            label: (masked_seq_len + infilling_seq_len, num_features)
-        """
-        masked_seq_len, _ = masked_data.shape
-        input = np.concatenate([masked_data, target], axis=0)
+    def _get_source_and_target(
+        self,
+        sources: List[np.ndarray],
+        targets: List[np.ndarray],
+        target_span_indices: List[int],
+        permutated: bool,
+    ) -> Tuple[np.ndarray, np.ndarray, List[int], List[int], List[int]]:
+        assert len(target_span_indices) == len(targets)
+        assert target_span_indices == sorted(target_span_indices)
+
+        source_list, target_list = [], []
+        current_source, current_target = 0, 0
+        mask_positions, sep_positions, target_span_lengths = [], [], []
+        current_source_position = 0
+        for span_index in range(len(sources) + len(targets)):
+            if current_target < len(targets) and span_index == target_span_indices[current_target]:
+                source_list.append([self.tokenizer.mask_token_ids])
+                target_list.append(np.concatenate(([self.tokenizer.sep_token_ids], targets[current_target]), axis=0))
+                mask_positions.append(current_source_position)
+                current_source_position += 1
+                current_target += 1
+            else:
+                source_list.append(sources[current_source])
+                current_source_position += len(sources[current_source])
+                current_source += 1
+        assert current_source == len(sources) and current_target == len(targets)
+
+        if permutated and len(targets) > 1:
+            permutation = np.random.permutation(len(targets))
+            target_list = [target_list[i] for i in permutation]
+
+        source = np.concatenate(source_list, axis=0)
+        target = np.concatenate(target_list, axis=0)
+        target_span_lengths = [len(target) for target in target_list]
+        sep_positions = [0] + np.cumsum(target_span_lengths)[:-1].tolist()
+
+        if permutated and len(targets) > 1:
+            # reorder sep positions back to original, so that sep postitions are corresponding to mask positions
+            sep_positions = [sep_positions[i] for i in np.argsort(permutation)]
+
+        return source, target, mask_positions, sep_positions, target_span_lengths
+
+    def _get_input_and_label(
+        self,
+        source: np.ndarray,
+        target: np.ndarray,
+        sep_positions: List[int],
+        field_padding_indices: Optional[List[int]],
+    ) -> Tuple[np.ndarray, np.ndarray]:
+
+        if self.ngram_field_specific_masking and field_padding_indices is not None:
+            target_labels = target.copy()
+            # pad target with field padding indices, only on non [SEP] positions
+            sep_position_mask = np.ones(len(target), dtype=np.bool)
+            sep_position_mask[sep_positions] = False
+            target_labels[np.ix_(sep_position_mask, field_padding_indices)] = self.tokenizer.pad_token_ids[
+                field_padding_indices
+            ]
+        else:
+            target_labels = target
+
+        input = np.concatenate([source, target], axis=0)
         label = np.concatenate(
             [
-                # pad tokens for masked data
-                np.full((masked_seq_len, len(self.tokenizer.field_names)), self.tokenizer.pad_token_ids),
-                # causal modeling for infilling data
-                target[1:, :],
-                # pad tokens for the last token
+                np.full_like(source, self.tokenizer.pad_token_ids),
+                target_labels[1:],
                 [self.tokenizer.sep_token_ids],
             ],
             axis=0,
         )
         return input, label
 
-    def _get_prefix_attention_mask(self, prefix_lengths: List[int], seq_len: int) -> torch.Tensor:
-        attention_masks = []
-        for prefix_length in prefix_lengths:
-            # bidirectional attention mask for prefix sequence
-            left_prefix_part = torch.zeros((seq_len, prefix_length), dtype=torch.bool)
+    def _get_attention_mask(
+        self, source_length: int, seq_len: int, target_span_lengths: Optional[List[int]] = None
+    ) -> torch.Tensor:
+        # bidirectional attention mask for prefix sequence
+        left_prefix_part = torch.zeros((seq_len, source_length), dtype=torch.bool)
 
-            target_length = seq_len - prefix_length
-            top_right_target_part = torch.ones((prefix_length, target_length), dtype=torch.bool)
+        target_length = seq_len - source_length
+        top_right_target_part = torch.ones((source_length, target_length), dtype=torch.bool)
+
+        if target_span_lengths is not None:
+            # independent causal attention mask for each infilling sequence
+            assert (
+                sum(target_span_lengths) <= target_length
+            ), "sum of target span lengths must be less than target length"
+            bottom_right_target_part = torch.ones((target_length, target_length), dtype=torch.bool)
+            span_start = 0
+            for span_length in target_span_lengths:
+                span_end = span_start + span_length
+                bottom_right_target_part[span_start:span_end, span_start:span_end] = torch.triu(
+                    torch.ones((span_length, span_length), dtype=torch.bool), diagonal=1
+                )
+                span_start = span_end
+        else:
             # causal attention mask for infilling sequence
             bottom_right_target_part = torch.triu(
                 torch.ones((target_length, target_length), dtype=torch.bool), diagonal=1
             )
 
-            right_target_part = torch.cat([top_right_target_part, bottom_right_target_part], dim=0)
-            mask = torch.cat([left_prefix_part, right_target_part], dim=1)
-            attention_masks.append(mask)
-        return torch.stack(attention_masks, dim=0)
+        right_target_part = torch.cat([top_right_target_part, bottom_right_target_part], dim=0)
+        return torch.cat([left_prefix_part, right_target_part], dim=1)
+
+    def _get_ngram_ids(self, mask_positions: List[int], ngram_id: Optional[List[int]], seq_len: int) -> torch.Tensor:
+        ngram_ids = np.ones(seq_len, dtype=np.int64) * default_padding_index
+        if ngram_id is not None:
+            assert len(mask_positions) == len(ngram_id), "mask_positions and ngram_id should have the same length"
+            ngram_ids[mask_positions] = ngram_id
+        return torch.from_numpy(ngram_ids).long()
+
+    def _get_span_indices(self, mask_positions: List[int], sep_positions: List[int], source_length: int, seq_len: int) -> torch.Tensor:
+        span_indices = np.ones(seq_len, dtype=np.int64) * default_padding_index
+        assert len(mask_positions) == len(sep_positions), "mask_positions and sep_positions should have the same length"
+        for i, (mask_position, sep_position) in enumerate(zip(mask_positions, sep_positions)):
+            span_indices[mask_position] = i
+            span_indices[sep_position + source_length] = i
+        return torch.from_numpy(span_indices).long()
 
     def __call__(self, batch: List[DatasetItem]) -> DatasetBatch:
         data_list = [item.data for item in batch]
@@ -889,55 +974,95 @@ class DataCollatorForPrefixMaskedLanguageModeling(DataCollator):
 
         # truncate
         data_list, offsets = self.truncate(data_list, self.seq_len, random_crop=self.random_crop)
+
+        # collect all the data, and genereate the inputs and labels
         inputs, labels = [], []
-        prefix_lengths, full_lengths = [], []
-        extra_labels, ngram_types = [], []
+        source_lengths, input_lengths = [], []
+        ngram_ids_list, ngram_types = [], []
+        mask_positions_list, sep_positions_list, target_span_lengths_list = [], [], []
         for data, extra_data, offset in zip(data_list, extra_data_list, offsets):
-            # mask each data separately
-            data_pair = self.masking.mask_for_infilling(data, offset=offset, **extra_data)
-            # construct prefix sequence
-            input, label = self._get_input_and_label(data_pair.masked_data, data_pair.target)
+            infilling_data = self.masking.mask_for_infilling(data, offset=offset, **extra_data)
+
+            source, target, mask_positions, sep_positions, target_span_lengths = self._get_source_and_target(
+                infilling_data.sources,
+                infilling_data.targets,
+                target_span_indices=infilling_data.target_span_indices,
+                permutated=self.permutated_infilling,
+            )
+            input, label = self._get_input_and_label(
+                source,
+                target,
+                sep_positions=sep_positions,
+                field_padding_indices=infilling_data.field_padding_indices,
+            )
+
             inputs.append(input)
             labels.append(label)
-            prefix_lengths.append(len(data_pair.masked_data))
-            full_lengths.append(len(input))
-            # save extra labels
-            extra_labels.append(data_pair.extra_label_ids)
-            ngram_types.append(data_pair.ngram_type)
+            source_lengths.append(len(source))
+            input_lengths.append(len(input))
+            mask_positions_list.append(mask_positions)
+            sep_positions_list.append(sep_positions)
+            target_span_lengths_list.append(target_span_lengths)
+
+            ngram_ids_list.append(infilling_data.ngram_ids)
+            ngram_types.append(infilling_data.ngram_type)
+
         # pad
         input_ids = torch.from_numpy(np.stack(self.pad(inputs), axis=0)).long()
         label_ids = torch.from_numpy(np.stack(self.pad(labels), axis=0)).long()
 
+        # padding mask (batch_size, seq_len)
         batch_size, seq_len, _ = input_ids.shape
         padding_mask = torch.zeros((batch_size, seq_len), dtype=torch.bool)
-        for i, full_length in enumerate(full_lengths):
-            padding_mask[i, full_length:] = True
+        for i, input_length in enumerate(input_lengths):
+            padding_mask[i, input_length:] = True
 
-        # prefix attention mask (batch_size, seq_len, seq_len)
-        attention_mask = self._get_prefix_attention_mask(prefix_lengths, seq_len)
+        # attention mask (batch_size, seq_len, seq_len)
+        attention_mask = torch.stack(
+            [
+                self._get_attention_mask(
+                    source_length,
+                    seq_len,
+                    target_span_lengths=target_span_lengths if self.span_independent_infilling else None,
+                )
+                for source_length, target_span_lengths in zip(source_lengths, target_span_lengths_list)
+            ],
+            dim=0,
+        )
 
-        # build extra label ids
-        any_extra_label = any(extra_label is not None for extra_label in extra_labels)
-        if any_extra_label:
-            for i, extra_label in enumerate(extra_labels):
-                if extra_label is not None:
-                    pad = (
-                        np.ones(seq_len - len(extra_label), dtype=extra_label.dtype)
-                        * default_padding_index_for_classification
-                    )
-                    extra_labels[i] = np.concatenate([extra_label, pad], axis=0)
-                else:
-                    extra_labels[i] = (
-                        np.ones(seq_len, dtype=np.int64) * default_padding_index_for_classification
-                    )
-            extra_label_ids = torch.from_numpy(np.stack(extra_labels, axis=0)).long()
-            assert extra_label_ids.shape == (batch_size, seq_len)
-            assert len(ngram_types) == batch_size
+        # ngram ids and types
+        if self.ngram_classification:
+            ngram_ids = torch.stack(
+                [
+                    self._get_ngram_ids(mask_positions, ngram_id_, seq_len)
+                    for mask_positions, ngram_id_ in zip(mask_positions_list, ngram_ids_list)
+                ],
+                dim=0,
+            )
+        else:
+            ngram_types = None
+            ngram_ids = None
 
-        return (
-            DatasetBatch(input_ids, label_ids, padding_mask, attention_mask, extra_label_ids, ngram_types)
-            if any_extra_label
-            else DatasetBatch(input_ids, label_ids, padding_mask, attention_mask)
+        # span indices for advanced infilling
+        if self.span_independent_infilling or self.permutated_infilling:
+            span_indices = torch.stack(
+                [
+                    self._get_span_indices(mask_positions, sep_positions, source_length, seq_len)
+                    for mask_positions, sep_positions, source_length in zip(mask_positions_list, sep_positions_list, source_lengths)
+                ],
+                dim=0,
+            )
+        else:
+            span_indices = None
+
+        return DatasetBatch(
+            input_ids,
+            label_ids,
+            padding_mask,
+            attention_mask,
+            ngram_types=ngram_types,
+            ngram_ids=ngram_ids,
+            span_indices=span_indices,
         )
 
 
