@@ -18,6 +18,7 @@ class CustomLightningCLI(LightningCLI):
             self.model = model_class.load_from_checkpoint(
                 load_from_checkpoint_path,
                 **model_args,
+                strict=False,
             )
             print("Loaded model from checkpoint:", load_from_checkpoint_path)
 
