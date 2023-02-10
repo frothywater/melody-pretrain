@@ -10,8 +10,8 @@ from torch.utils.data import DataLoader, Dataset
 from .tokenizer import MIDITokenizer
 
 
-# Pytorch default padding index is -100, used for ngram classification and position embedding
-default_padding_index = -100
+ngram_ids_ignore_index = -100
+span_indices_padding_index = 0
 
 
 class DatasetItem(NamedTuple):
@@ -954,18 +954,18 @@ class DataCollatorForPrefixMaskedLanguageModeling(DataCollator):
         return torch.cat([left_prefix_part, right_target_part], dim=1)
 
     def _get_ngram_ids(self, mask_positions: List[int], ngram_id: Optional[List[int]], seq_len: int) -> torch.Tensor:
-        ngram_ids = np.ones(seq_len, dtype=np.int64) * default_padding_index
+        ngram_ids = np.ones(seq_len, dtype=np.int64) * ngram_ids_ignore_index
         if ngram_id is not None:
             assert len(mask_positions) == len(ngram_id), "mask_positions and ngram_id should have the same length"
             ngram_ids[mask_positions] = ngram_id
         return torch.from_numpy(ngram_ids).long()
 
     def _get_span_indices(self, mask_positions: List[int], sep_positions: List[int], source_length: int, seq_len: int) -> torch.Tensor:
-        span_indices = np.ones(seq_len, dtype=np.int64) * default_padding_index
+        span_indices = np.ones(seq_len, dtype=np.int64) * span_indices_padding_index
         assert len(mask_positions) == len(sep_positions), "mask_positions and sep_positions should have the same length"
         for i, (mask_position, sep_position) in enumerate(zip(mask_positions, sep_positions)):
-            span_indices[mask_position] = i
-            span_indices[sep_position + source_length] = i
+            span_indices[mask_position] = i + 1
+            span_indices[sep_position + source_length] = i + 1
         return torch.from_numpy(span_indices).long()
 
     def __call__(self, batch: List[DatasetItem]) -> DatasetBatch:

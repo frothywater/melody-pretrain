@@ -45,7 +45,7 @@ if __name__ == "__main__":
 
     data_module.setup("test")
 
-    for batch in data_module.val_dataloader():
+    for batch in data_module.test_dataloader():
         print("ngram_types:")
         print(batch.ngram_types)
         print("input_ids:")
