@@ -1,38 +1,16 @@
 # lightning.pytorch==1.8.3.post1
 trainer:
-  default_root_dir: experiment/model-lmd/pretrain_ngram_explicit
-  accumulate_grad_batches: 32
-  strategy: fsdp_native
-  gradient_clip_val:
-  callbacks:
-    - class_path: LearningRateMonitor
-      init_args:
-        logging_interval: step
-    - class_path: ModelCheckpoint
-      init_args:
-        save_top_k: 1
-        monitor: val_loss
-        mode: min
-        filename: "{epoch:02d}-{train_loss:.3f}-{val_loss:.3f}"
-    - class_path: ModelCheckpoint
-      init_args:
-        save_top_k: 1
-        monitor: step
-        mode: max
-        filename: "{epoch:02d}-{train_loss:.3f}-{val_loss:.3f}-{step}"
+  default_root_dir: experiment/model-lmd/pretrain_ngram_multi_plus
 model:
   dataset_dir: experiment/dataset/lmd
-  ngram_classification: True
   use_span_positional_encoding: True
 data:
-  batch_size: 8
   dataset_dir: experiment/dataset/lmd
   data_collator:
     class_path: DataCollatorForPrefixMaskedLanguageModeling
     init_args:
       seq_len: 512
       random_crop: true
-      ngram_classification: True
       ngram_field_specific_masking: True
       span_independent_infilling: True
       permutated_infilling: True
