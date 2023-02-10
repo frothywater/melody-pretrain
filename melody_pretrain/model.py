@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .dataset import DatasetBatch
+from .dataset import DatasetBatch, ngram_ids_ignore_index, span_indices_padding_index
 from .tokenizer import MIDITokenizer
 from .ngram import get_lexicon_size
 
@@ -91,6 +91,25 @@ class NgramClassificationHead(nn.Module):
         return pitch_logits, rhythm_logits
 
 
+class SpanPositionalEncoding(nn.Module):
+    """Learnable positional encoding added on [MASK] and [SEP] tokens for advanced span prediction."""
+
+    def __init__(self, model_dim: int, max_length: int = 128) -> None:
+        super().__init__()
+        self.model_dim = model_dim
+        self.max_length = max_length
+
+        self.positional_encoding = nn.Embedding(max_length, model_dim, padding_idx=span_indices_padding_index)
+
+    def forward(self, span_indices: torch.Tensor) -> torch.Tensor:
+        """Args:
+            span_indices: (batch_size, seq_len)
+        Returns:
+            span_encoding: (batch_size, seq_len, model_dim)
+        """
+        return self.positional_encoding(span_indices)
+
+
 class MelodyModel(pl.LightningModule):
     """Base model for core step logic."""
 
@@ -105,6 +124,7 @@ class MelodyModel(pl.LightningModule):
         num_layers: int,
         num_heads: int,
         dropout: float,
+        use_span_positional_encoding: bool,
         **kwargs,
     ) -> None:
         super().__init__()
@@ -131,11 +151,16 @@ class MelodyModel(pl.LightningModule):
             num_layers=num_layers,
         )
 
+        self.use_span_positional_encoding = use_span_positional_encoding
+        if use_span_positional_encoding:
+            self.span_positional_encoding = SpanPositionalEncoding(model_dim)
+
     def forward(
         self,
         x: torch.Tensor,
         padding_mask: Optional[torch.Tensor] = None,
         attn_mask: Optional[torch.Tensor] = None,
+        span_indices: Optional[torch.Tensor] = None,
         return_outputs: bool = False,
     ) -> List[torch.Tensor]:
         """Args:
@@ -148,6 +173,9 @@ class MelodyModel(pl.LightningModule):
             outputs: (batch_size, seq_len, model_dim), transformer encoder outputs
         """
         x = self.fuser(x)
+        if self.use_span_positional_encoding:
+            encoding = self.span_positional_encoding(span_indices)
+            x = x + encoding
         outputs = self.transformer_encoder(x, src_key_padding_mask=padding_mask, mask=attn_mask)
         decoded = self.fuser.decode(outputs)
         if return_outputs:
@@ -184,7 +212,13 @@ class MelodyModel(pl.LightningModule):
             attention_mask = attention_mask.expand(self.num_heads, -1, -1, -1).reshape(
                 self.num_heads * batch_size, seq_len, seq_len
             )
-        return self(batch.input_ids, batch.padding_mask, attention_mask, return_outputs=return_outputs)
+        return self(
+            batch.input_ids,
+            batch.padding_mask,
+            attention_mask,
+            span_indices=batch.span_indices,
+            return_outputs=return_outputs,
+        )
 
 
 class MelodyPretrainModel(MelodyModel):
@@ -207,8 +241,9 @@ class MelodyPretrainModel(MelodyModel):
         weight_decay: float,
         warmup_percent: float,
         # Training configuration
+        use_span_positional_encoding: bool = False,
         ngram_classification: bool = False,
-        ngram_classification_weight: float = 0.25,
+        ngram_classification_weight: float = 0.15,
         **kwargs,
     ) -> None:
         super().__init__(
@@ -219,6 +254,7 @@ class MelodyPretrainModel(MelodyModel):
             num_layers=num_layers,
             num_heads=num_heads,
             dropout=dropout,
+            use_span_positional_encoding=use_span_positional_encoding,
         )
 
         self.lr = lr
@@ -235,7 +271,7 @@ class MelodyPretrainModel(MelodyModel):
             self.ngram_head = NgramClassificationHead(model_dim, ngram_size=(self.pitch_size, self.rhythm_size))
 
     def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr, betas=self.betas, weight_decay=self.weight_decay)
+        optimizer = torch.optim.AdamW(self.trainer.model.parameters(), lr=self.lr, betas=self.betas, weight_decay=self.weight_decay)
         lr_scheduler = torch.optim.lr_scheduler.OneCycleLR(
             optimizer,
             max_lr=self.lr,
@@ -247,7 +283,7 @@ class MelodyPretrainModel(MelodyModel):
         return [optimizer], [scheduler]
 
     def ngram_classification_step(
-        self, logits: torch.Tensor, label_ids: torch.Tensor, ngram_types: List[str]
+        self, logits: torch.Tensor, ngram_ids: torch.Tensor, ngram_types: List[str]
     ) -> torch.Tensor:
         """Args:
         logits: (batch_size, seq_len, model_dim)
@@ -256,21 +292,25 @@ class MelodyPretrainModel(MelodyModel):
         """
         batch_size, seq_len, _ = logits.shape
         assert len(ngram_types) == batch_size, "ngram_types must be a list of length batch_size"
-        assert label_ids.shape == (batch_size, seq_len), "label_ids must be of shape (batch_size, seq_len)"
+        assert ngram_ids.shape == (batch_size, seq_len), "label_ids must be of shape (batch_size, seq_len)"
         pitch_logits, rhythm_logits = self.ngram_head(logits)
 
         pitch_indices = [i for i, ngram_type in enumerate(ngram_types) if ngram_type == "pitch"]
         rhythm_indices = [i for i, ngram_type in enumerate(ngram_types) if ngram_type == "rhythm"]
         # extract corresponding ngram types
         pitch_logits = pitch_logits[pitch_indices]
-        pitch_label_ids = label_ids[pitch_indices]
+        pitch_label_ids = ngram_ids[pitch_indices]
         rhythm_logits = rhythm_logits[rhythm_indices]
-        rhythm_label_ids = label_ids[rhythm_indices]
+        rhythm_label_ids = ngram_ids[rhythm_indices]
 
         # (batch_size, seq_len, vocab_size) -> (batch_size, vocab_size, seq_len)
         # use reduction="sum" to avoid averaging over the batch
-        pitch_loss = F.cross_entropy(pitch_logits.transpose(1, 2), pitch_label_ids, reduction="sum")
-        rhythm_loss = F.cross_entropy(rhythm_logits.transpose(1, 2), rhythm_label_ids, reduction="sum")
+        pitch_loss = F.cross_entropy(
+            pitch_logits.transpose(1, 2), pitch_label_ids, reduction="sum", ignore_index=ngram_ids_ignore_index
+        )
+        rhythm_loss = F.cross_entropy(
+            rhythm_logits.transpose(1, 2), rhythm_label_ids, reduction="sum", ignore_index=ngram_ids_ignore_index
+        )
         # average over the number of non-padding tokens
         count = torch.count_nonzero(pitch_label_ids != -100) + torch.count_nonzero(rhythm_label_ids != -100)
         return (pitch_loss + rhythm_loss) / count
@@ -280,10 +320,8 @@ class MelodyPretrainModel(MelodyModel):
         logits, outputs = self._shared_step(batch, return_outputs=True)
         loss, losses = self._get_loss(logits, batch.label_ids, return_parts=True)
 
-        if self.ngram_classification and batch.extra_label_ids is not None and batch.ngram_types is not None:
-            ngram_classification_loss = self.ngram_classification_step(
-                outputs, batch.extra_label_ids, batch.ngram_types
-            )
+        if self.ngram_classification:
+            ngram_classification_loss = self.ngram_classification_step(outputs, batch.ngram_ids, batch.ngram_types)
             loss += ngram_classification_loss * self.ngram_classification_weight
             self.log("train_loss:ngram", ngram_classification_loss, sync_dist=True, batch_size=batch_size)
 
@@ -300,10 +338,8 @@ class MelodyPretrainModel(MelodyModel):
         logits, outputs = self._shared_step(batch, return_outputs=True)
         loss = self._get_loss(logits, batch.label_ids)
 
-        if self.ngram_classification and batch.extra_label_ids is not None and batch.ngram_types is not None:
-            ngram_classification_loss = self.ngram_classification_step(
-                outputs, batch.extra_label_ids, batch.ngram_types
-            )
+        if self.ngram_classification:
+            ngram_classification_loss = self.ngram_classification_step(outputs, batch.ngram_ids, batch.ngram_types)
             loss += ngram_classification_loss * self.ngram_classification_weight
 
         self.log("val_loss", loss, sync_dist=True, batch_size=batch_size)
