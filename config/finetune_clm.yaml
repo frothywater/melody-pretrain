@@ -4,9 +4,9 @@ model:
   dataset_dir: experiment/dataset/wikifonia
 trainer:
   max_steps: 2000
-  accumulate_grad_batches: 8
+  accumulate_grad_batches: 16
 data:
-  batch_size: 48
+  batch_size: 24
   dataset_dir: experiment/dataset/wikifonia
   data_collator:
     class_path: DataCollatorForCausalLanguageModeling

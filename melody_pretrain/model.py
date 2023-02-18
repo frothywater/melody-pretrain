@@ -124,7 +124,7 @@ class MelodyModel(pl.LightningModule):
         num_layers: int,
         num_heads: int,
         dropout: float,
-        use_span_positional_encoding: bool,
+        use_span_positional_encoding: bool = False,
         **kwargs,
     ) -> None:
         super().__init__()
@@ -271,7 +271,7 @@ class MelodyPretrainModel(MelodyModel):
             self.ngram_head = NgramClassificationHead(model_dim, ngram_size=(self.pitch_size, self.rhythm_size))
 
     def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(self.trainer.model.parameters(), lr=self.lr, betas=self.betas, weight_decay=self.weight_decay)
+        optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr, betas=self.betas, weight_decay=self.weight_decay)
         lr_scheduler = torch.optim.lr_scheduler.OneCycleLR(
             optimizer,
             max_lr=self.lr,
@@ -312,7 +312,9 @@ class MelodyPretrainModel(MelodyModel):
             rhythm_logits.transpose(1, 2), rhythm_label_ids, reduction="sum", ignore_index=ngram_ids_ignore_index
         )
         # average over the number of non-padding tokens
-        count = torch.count_nonzero(pitch_label_ids != -100) + torch.count_nonzero(rhythm_label_ids != -100)
+        count = torch.count_nonzero(pitch_label_ids != ngram_ids_ignore_index) + torch.count_nonzero(
+            rhythm_label_ids != ngram_ids_ignore_index
+        )
         return (pitch_loss + rhythm_loss) / count
 
     def training_step(self, batch: DatasetBatch, batch_idx: int) -> torch.Tensor:
