@@ -1,0 +1,55 @@
+# lightning.pytorch==1.8.3.post1
+seed_everything: 42
+trainer:
+  default_root_dir: experiment/model-lmd/pretrain_ngram_explicit
+  max_steps: 5000
+  accumulate_grad_batches: 8
+  strategy: deepspeed_stage_2
+  accelerator: gpu
+  precision: 16
+  log_every_n_steps: 1
+  gradient_clip_val: 1.0
+  callbacks:
+    - class_path: LearningRateMonitor
+      init_args:
+        logging_interval: step
+    - class_path: ModelCheckpoint
+      init_args:
+        save_top_k: 1
+        monitor: step
+        mode: max
+        filename: "{epoch:02d}-{train_loss:.3f}-{val_loss:.3f}-{step}"
+model:
+  dataset_dir: experiment/dataset/lmd
+  ngram_classification: True
+  use_span_positional_encoding: True
+data:
+  batch_size: 8
+  num_workers: 4
+  dataset_dir: experiment/dataset/lmd
+  data_collator:
+    class_path: DataCollatorForPrefixMaskedLanguageModeling
+    init_args:
+      seq_len: 512
+      random_crop: true
+      ngram_classification: True
+      ngram_field_specific_masking: True
+      permutated_infilling: True
+      masking:
+        class_path: MultiTargetInfillingMasking
+        init_args:
+          probabilities: [0.25, 0.25, 0.5]
+          maskings:
+            - class_path: RandomNgramMasking
+              init_args:
+                corruption_rate: 0.25
+                extra_data_field_name: pitch_ngrams
+            - class_path: RandomNgramMasking
+              init_args:
+                corruption_rate: 0.25
+                extra_data_field_name: rhythm_ngrams
+            - class_path: SingleSpanMasking
+              init_args:
+                corruption_rate: 0.5
+  load_ngram_data: true
+  pitch_augumentation: True
