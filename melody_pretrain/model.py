@@ -569,7 +569,7 @@ class MelodyInfillingModel(MelodyModel):
             sampled_tokens = torch.cat(sampled_tokens, dim=-1)
 
             token = self.tokenizer.convert_id_to_token(sampled_tokens.cpu().numpy())
-            print(token)
+            # print(token)
 
             # until the model predicts a seperator token, or the desired bar length is reached
             if (

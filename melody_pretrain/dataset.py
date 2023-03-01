@@ -960,7 +960,9 @@ class DataCollatorForPrefixMaskedLanguageModeling(DataCollator):
             ngram_ids[mask_positions] = ngram_id
         return torch.from_numpy(ngram_ids).long()
 
-    def _get_span_indices(self, mask_positions: List[int], sep_positions: List[int], source_length: int, seq_len: int) -> torch.Tensor:
+    def _get_span_indices(
+        self, mask_positions: List[int], sep_positions: List[int], source_length: int, seq_len: int
+    ) -> torch.Tensor:
         span_indices = np.ones(seq_len, dtype=np.int64) * span_indices_padding_index
         assert len(mask_positions) == len(sep_positions), "mask_positions and sep_positions should have the same length"
         for i, (mask_position, sep_position) in enumerate(zip(mask_positions, sep_positions)):
@@ -1048,7 +1050,9 @@ class DataCollatorForPrefixMaskedLanguageModeling(DataCollator):
             span_indices = torch.stack(
                 [
                     self._get_span_indices(mask_positions, sep_positions, source_length, seq_len)
-                    for mask_positions, sep_positions, source_length in zip(mask_positions_list, sep_positions_list, source_lengths)
+                    for mask_positions, sep_positions, source_length in zip(
+                        mask_positions_list, sep_positions_list, source_lengths
+                    )
                 ],
                 dim=0,
             )
@@ -1128,27 +1132,27 @@ class MelodyPretrainDataModule(pl.LightningDataModule):
         self.pitch_augumentation = pitch_augumentation
 
     def setup(self, stage: str):
-        train_dir = os.path.join(self.dataset_dir, "train")
-        valid_dir = os.path.join(self.dataset_dir, "valid")
-        test_dir = os.path.join(self.dataset_dir, "test")
+        self.train_dir = os.path.join(self.dataset_dir, "train")
+        self.valid_dir = os.path.join(self.dataset_dir, "valid")
+        self.test_dir = os.path.join(self.dataset_dir, "test")
         self.train_dataset = MelodyDataset(
-            train_dir,
+            self.train_dir,
             load_bar_data=self.load_bar_data,
             load_ngram_data=self.load_ngram_data,
             pitch_augumentation=self.pitch_augumentation,
         )
         self.train_dataset.setup_tokenizer(self.tokenizer)
-        if os.path.exists(valid_dir):
+        if os.path.exists(self.valid_dir):
             self.valid_dataset = MelodyDataset(
-                valid_dir,
+                self.valid_dir,
                 load_bar_data=self.load_bar_data,
                 load_ngram_data=self.load_ngram_data,
                 pitch_augumentation=self.pitch_augumentation,
             )
             self.valid_dataset.setup_tokenizer(self.tokenizer)
-        if os.path.exists(test_dir):
+        if os.path.exists(self.test_dir):
             self.test_dataset = MelodyDataset(
-                test_dir,
+                self.test_dir,
                 load_bar_data=self.load_bar_data,
                 load_ngram_data=self.load_ngram_data,
                 pitch_augumentation=self.pitch_augumentation,
@@ -1167,6 +1171,8 @@ class MelodyPretrainDataModule(pl.LightningDataModule):
         )
 
     def val_dataloader(self):
+        if not os.path.exists(self.valid_dir):
+            return None
         return DataLoader(
             self.valid_dataset,
             batch_size=self.batch_size,
@@ -1176,6 +1182,8 @@ class MelodyPretrainDataModule(pl.LightningDataModule):
         )
 
     def test_dataloader(self):
+        if not os.path.exists(self.test_dir):
+            return None
         return DataLoader(
             self.test_dataset,
             batch_size=self.batch_size,
@@ -1185,6 +1193,8 @@ class MelodyPretrainDataModule(pl.LightningDataModule):
         )
 
     def predict_dataloader(self):
+        if not os.path.exists(self.test_dir):
+            return None
         # batch_size=1 for prediction currently
         return DataLoader(
             self.test_dataset,
