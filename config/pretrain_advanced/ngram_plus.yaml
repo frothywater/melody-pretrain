@@ -1,18 +1,20 @@
 # lightning.pytorch==1.8.3.post1
 trainer:
-  default_root_dir: experiment/model-lmd/pretrain_ngram_multi_plus
+  default_root_dir: experiment/model/pretrain_ngram_plus
 model:
-  dataset_dir: experiment/dataset/lmd
-  use_span_positional_encoding: True
+  dataset_dir: experiment/dataset/pretrain_base
+  use_span_positional_encoding: true
 data:
-  dataset_dir: experiment/dataset/lmd
+  dataset_dir: experiment/dataset/pretrain_base
+  load_ngram_data: true
+  pitch_augumentation: true
   data_collator:
     class_path: DataCollatorForPrefixMaskedLanguageModeling
     init_args:
       seq_len: 512
       random_crop: true
-      ngram_field_specific_masking: True
-      permutated_infilling: True
+      ngram_field_specific_masking: true
+      permutated_infilling: true
       masking:
         class_path: MultiTargetInfillingMasking
         init_args:
@@ -29,5 +31,3 @@ data:
             - class_path: SingleSpanMasking
               init_args:
                 corruption_rate: 0.5
-  load_ngram_data: true
-  pitch_augumentation: True

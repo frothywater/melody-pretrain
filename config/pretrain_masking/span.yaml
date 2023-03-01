@@ -1,10 +1,11 @@
 # lightning.pytorch==1.8.3.post1
 trainer:
-  default_root_dir: experiment/model-lmd/pretrain_span
+  default_root_dir: experiment/model/pretrain_span
 model:
-  dataset_dir: experiment/dataset/lmd
+  dataset_dir: experiment/dataset/pretrain_base
 data:
-  dataset_dir: experiment/dataset/lmd
+  dataset_dir: experiment/dataset/pretrain_base
+  pitch_augumentation: true
   data_collator:
     class_path: DataCollatorForPrefixMaskedLanguageModeling
     init_args:
@@ -13,5 +14,4 @@ data:
       masking:
         class_path: RandomSpanMasking
         init_args:
-          corruption_rate: 0.15
-  pitch_augumentation: True
+          corruption_rate: 0.25

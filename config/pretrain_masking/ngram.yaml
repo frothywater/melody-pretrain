@@ -1,10 +1,12 @@
 # lightning.pytorch==1.8.3.post1
 trainer:
-  default_root_dir: experiment/model-lmd/pretrain_ngram
+  default_root_dir: experiment/model/pretrain_ngram
 model:
-  dataset_dir: experiment/dataset/lmd
+  dataset_dir: experiment/dataset/pretrain_base
 data:
-  dataset_dir: experiment/dataset/lmd
+  dataset_dir: experiment/dataset/pretrain_base
+  load_ngram_data: true
+  pitch_augumentation: true
   data_collator:
     class_path: DataCollatorForPrefixMaskedLanguageModeling
     init_args:
@@ -17,11 +19,9 @@ data:
           maskings:
             - class_path: RandomNgramMasking
               init_args:
-                corruption_rate: 0.15
+                corruption_rate: 0.25
                 extra_data_field_name: pitch_ngrams
             - class_path: RandomNgramMasking
               init_args:
-                corruption_rate: 0.15
+                corruption_rate: 0.25
                 extra_data_field_name: rhythm_ngrams
-  load_ngram_data: true
-  pitch_augumentation: True

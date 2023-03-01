@@ -1,6 +1,16 @@
 # lightning.pytorch==1.8.3.post1
 seed_everything: 42
 trainer:
+  max_steps: 5000
+  accelerator: gpu
+  precision: 16
+  accumulate_grad_batches: 4
+  gradient_clip_val: 1.0
+  log_every_n_steps: 1
+  strategy:
+    class_path: DDPStrategy
+    init_args:
+      find_unused_parameters: false
   callbacks:
     - class_path: StochasticWeightAveraging
       init_args:
@@ -10,29 +20,11 @@ trainer:
         logging_interval: step
     - class_path: ModelCheckpoint
       init_args:
-        save_top_k: 1
-        monitor: val_loss
-        mode: min
-        filename: "{epoch:02d}-{train_loss:.3f}-{val_loss:.3f}"
-    - class_path: ModelCheckpoint
-      init_args:
-        save_top_k: 1
-        monitor: step
-        mode: max
-        filename: "{epoch:02d}-{train_loss:.3f}-{val_loss:.3f}-{step}"
-  gradient_clip_val: 1.0
-  devices: 1
-  max_steps: 5000
-  log_every_n_steps: 1
-  accelerator: gpu
-  strategy:
-    class_path: DDPStrategy
-    init_args:
-      find_unused_parameters: false
-  precision: 16
-  accumulate_grad_batches: 16
+        every_n_train_steps: 1000
+        save_on_train_epoch_end: true
+        filename: "{step}.ckpt"
 data:
-  batch_size: 16
+  batch_size: 56
   num_workers: 4
 
 # debug
