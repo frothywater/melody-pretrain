@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .dataset import DatasetBatch, ngram_ids_ignore_index, span_indices_padding_index
+from .dataset import DataBatch, GeneralDataBatch, ngram_ids_ignore_index, span_indices_padding_index
 from .tokenizer import MIDITokenizer
 from .ngram import get_lexicon_size
 
@@ -380,7 +380,7 @@ class MelodyTestingModel(MelodyModel):
 
         self.pad_token_tensor = torch.from_numpy(self.tokenizer.pad_token_ids).long()
 
-    def test_step(self, batch: DatasetBatch, batch_idx: int) -> torch.Tensor:
+    def test_step(self, batch: DataBatch, batch_idx: int) -> torch.Tensor:
         """Calculate strided fixed-length perplexity for CLM model.
         Reference: https://huggingface.co/docs/transformers/perplexity
         """
@@ -398,13 +398,13 @@ class MelodyTestingModel(MelodyModel):
             # Mask out context tokens for labels
             new_label_ids = batch.label_ids[:, start_index:end_index, :].clone()
             new_label_ids[:, :-target_length] = self.pad_token_tensor.to(new_label_ids.device)
-            new_batch = DatasetBatch(
+            new_batch = DataBatch(
                 input_ids=batch.input_ids[:, start_index:end_index, :],
                 label_ids=new_label_ids,
                 padding_mask=batch.padding_mask[:, start_index:end_index],
                 attention_mask=batch.attention_mask[start_index:end_index, start_index:end_index],
             )
-            logits = self._shared_step(new_batch)
+            logits = self._get_logits(new_batch)
             loss = self._get_loss(logits, new_batch.label_ids)
             neg_log_likelihood = loss * target_length
             nlls.append(neg_log_likelihood)
@@ -451,7 +451,7 @@ class MelodyCompletionModel(MelodyModel):
         self.temperature = temperature
         self.top_k = top_k
 
-    def predict_step(self, batch: DatasetBatch, batch_idx: int, dataloader_idx: int = 0) -> torch.Tensor:
+    def predict_step(self, batch: DataBatch, batch_idx: int, dataloader_idx: int = 0) -> torch.Tensor:
         input_ids = batch.input_ids
         batch_size, _, _ = input_ids.shape
         assert batch_size == 1, "Only support batch size of 1 for prediction for now"
@@ -529,7 +529,7 @@ class MelodyInfillingModel(MelodyModel):
 
         self.sep_token = torch.from_numpy(self.tokenizer.sep_token_ids)
 
-    def predict_step(self, batch: DatasetBatch, batch_idx: int, dataloader_idx: int = 0) -> torch.Tensor:
+    def predict_step(self, batch: DataBatch, batch_idx: int, dataloader_idx: int = 0) -> torch.Tensor:
         input_ids = batch.input_ids
         batch_size, original_len, _ = input_ids.shape
         assert batch_size == 1, "Only support batch size of 1 for prediction for now"
@@ -620,7 +620,7 @@ class CustomWriter(BasePredictionWriter):
         pl_module: MelodyPretrainModel,
         prediction: torch.Tensor,
         batch_indices: Optional[Sequence[int]],
-        batch: DatasetBatch,
+        batch: DataBatch,
         batch_idx: int,
         dataloader_idx: int,
     ) -> None:
