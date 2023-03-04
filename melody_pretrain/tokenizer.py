@@ -74,12 +74,14 @@ class MIDITokenizer:
         self.sep_token_str = "<SEP>"
         self.cls_token_str = "<CLS>"
         self.mask_token_str = "[MASK]"
+        self.long_mask_token_str = "[longMASK]"
         self.bos_token = MIDICompoundToken(*[self.bos_token_str] * len(self.field_names))
         self.eos_token = MIDICompoundToken(*[self.eos_token_str] * len(self.field_names))
         self.pad_token = MIDICompoundToken(*[self.pad_token_str] * len(self.field_names))
         self.sep_token = MIDICompoundToken(*[self.sep_token_str] * len(self.field_names))
         self.cls_token = MIDICompoundToken(*[self.cls_token_str] * len(self.field_names))
         self.mask_token = MIDICompoundToken(*[self.mask_token_str] * len(self.field_names))
+        self.long_mask_token = MIDICompoundToken(*[self.long_mask_token_str] * len(self.field_names))
         self.special_token_str = [
             self.bos_token_str,
             self.eos_token_str,
@@ -87,6 +89,7 @@ class MIDITokenizer:
             self.sep_token_str,
             self.cls_token_str,
             self.mask_token_str,
+            self.long_mask_token_str,
         ]
 
         # add special tokens to the encoder and decoder
@@ -103,6 +106,7 @@ class MIDITokenizer:
         self.sep_token_ids = self.convert_token_to_id(self.sep_token)
         self.cls_token_ids = self.convert_token_to_id(self.cls_token)
         self.mask_token_ids = self.convert_token_to_id(self.mask_token)
+        self.long_mask_token_ids = self.convert_token_to_id(self.long_mask_token)
         self.special_token_id_matrix = np.array(
             [
                 self.bos_token_ids,
@@ -111,6 +115,7 @@ class MIDITokenizer:
                 self.sep_token_ids,
                 self.cls_token_ids,
                 self.mask_token_ids,
+                self.long_mask_token_ids,
             ]
         ).T  # (num_features, num_tokens)
 

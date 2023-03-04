@@ -33,6 +33,8 @@ class InfillingData(NamedTuple):
 
     field_padding_indices: Optional[List[int]] = None
 
+    # Indicate whether the masked span is used for CLM
+    is_long_mask: bool = False
 
 class DatasetBatch(NamedTuple):
     """A batch of data for training. Allow extra data to be attached to the batch.
@@ -245,7 +247,7 @@ class SingleSpanMasking(InfillingMasking):
         targets = [data[start:end]]
         # target span index is always 1, since the sequence is {source, target, source}
         target_span_indices = [1]
-        return InfillingData(sources, targets, target_span_indices)
+        return InfillingData(sources, targets, target_span_indices, is_long_mask=True)
 
 
 class RandomSpanMasking(InfillingMasking):
@@ -484,7 +486,7 @@ class FixedBarMasking(RandomBarMasking):
         targets = [middle]
         # target span index is always 1, since the sequence is {past, middle, future}
         target_span_indices = [1]
-        return InfillingData(sources, targets, target_span_indices)
+        return InfillingData(sources, targets, target_span_indices, is_long_mask=True)
 
 
 class RandomNgramMasking(InfillingMasking):
@@ -753,7 +755,7 @@ class DataCollatorForInfilling(DataCollator):
         for data, extra_data in zip(data_list, extra_data_list):
             sources = self.masking.mask_for_infilling(data, **extra_data).sources
             assert len(sources) == 2, "Fixed bar masking should generate past and future spans."
-            masked_data = np.concatenate([sources[0], [self.tokenizer.mask_token_ids], sources[1]], axis=0)
+            masked_data = np.concatenate([sources[0], [self.tokenizer.long_mask_token_ids], sources[1]], axis=0)
             masked_data_list.append(masked_data)
         input_ids = np.stack(self.pad(masked_data_list), axis=0)
         input_ids = torch.from_numpy(input_ids).long()
@@ -856,6 +858,7 @@ class DataCollatorForPrefixMaskedLanguageModeling(DataCollator):
         targets: List[np.ndarray],
         target_span_indices: List[int],
         permutated: bool,
+        is_long_mask: bool,
     ) -> Tuple[np.ndarray, np.ndarray, List[int], List[int], List[int]]:
         assert len(target_span_indices) == len(targets)
         assert target_span_indices == sorted(target_span_indices)
@@ -866,7 +869,10 @@ class DataCollatorForPrefixMaskedLanguageModeling(DataCollator):
         current_source_position = 0
         for span_index in range(len(sources) + len(targets)):
             if current_target < len(targets) and span_index == target_span_indices[current_target]:
-                source_list.append([self.tokenizer.mask_token_ids])
+                if is_long_mask:
+                    source_list.append([self.tokenizer.long_mask_token_ids])
+                else:
+                    source_list.append([self.tokenizer.mask_token_ids])
                 target_list.append(np.concatenate(([self.tokenizer.sep_token_ids], targets[current_target]), axis=0))
                 mask_positions.append(current_source_position)
                 current_source_position += 1
@@ -990,6 +996,7 @@ class DataCollatorForPrefixMaskedLanguageModeling(DataCollator):
                 infilling_data.targets,
                 target_span_indices=infilling_data.target_span_indices,
                 permutated=self.permutated_infilling,
+                is_long_mask=infilling_data.is_long_mask,
             )
             input, label = self._get_input_and_label(
                 source,
