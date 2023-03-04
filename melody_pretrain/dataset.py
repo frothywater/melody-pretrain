@@ -62,7 +62,7 @@ class DataBatch(NamedTuple):
     attention_mask: Optional[torch.Tensor] = None
 
     # Used for explicit ngram prediction
-    ngram_types: Optional[List[str]] = None
+    ngram_type: Optional[str] = None
     ngram_ids: Optional[torch.Tensor] = None
 
     # Used for permutated span prediction
@@ -950,7 +950,7 @@ class DataCollatorForPrefixMaskedLanguageModeling(DataCollator):
         # collect all the data, and genereate the inputs and labels
         inputs, labels = [], []
         source_lengths, input_lengths = [], []
-        ngram_ids_list, ngram_types = [], []
+        ngram_ids_list = []
         mask_positions_list, sep_positions_list, target_span_lengths_list = [], [], []
         for data, extra_data, offset in zip(data_list, extra_data_list, offsets):
             infilling_data = self.masking.mask_for_infilling(data, offset=offset, **extra_data)
@@ -978,7 +978,7 @@ class DataCollatorForPrefixMaskedLanguageModeling(DataCollator):
             target_span_lengths_list.append(target_span_lengths)
 
             ngram_ids_list.append(infilling_data.ngram_ids)
-            ngram_types.append(infilling_data.ngram_type)
+            ngram_type = infilling_data.ngram_type
 
         # pad
         input_ids = torch.from_numpy(np.stack(self.pad(inputs), axis=0)).long()
@@ -1013,7 +1013,7 @@ class DataCollatorForPrefixMaskedLanguageModeling(DataCollator):
                 dim=0,
             )
         else:
-            ngram_types = None
+            ngram_type = None
             ngram_ids = None
 
         # span indices for advanced infilling
@@ -1035,7 +1035,7 @@ class DataCollatorForPrefixMaskedLanguageModeling(DataCollator):
             label_ids,
             padding_mask,
             attention_mask,
-            ngram_types=ngram_types,
+            ngram_type=ngram_type,
             ngram_ids=ngram_ids,
             span_indices=span_indices,
         )
