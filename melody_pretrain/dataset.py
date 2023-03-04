@@ -76,22 +76,6 @@ class Masking:
         length_mask = torch.arange(seq_len)[None, :] >= lengths[:, None]
         return length_mask
 
-    def _get_special_tokens_mask_batch(self, batch: torch.Tensor) -> torch.Tensor:
-        """Get special tokens mask for data.
-        Args:
-            data: (batch, seq_len, num_features)
-        Returns:
-            special_tokens_mask: (batch, seq_len)
-        """
-        # (batch, seq_len, num_features, num_tokens)
-        batch = batch.unsqueeze(-1)
-        candidates = torch.from_numpy(self.tokenizer.special_token_id_matrix).long()
-        candidates = candidates[None, None, :, :].expand_as(batch)
-        # If any of the features matches any of the special tokens, then it is a special token
-        special_tokens_mask = (batch == candidates).any(dim=-1)
-        special_tokens_mask = special_tokens_mask.any(dim=-1)
-        return special_tokens_mask
-
     def _get_spans(self, mask_indices: np.ndarray) -> np.ndarray:
         """Get spans of True values in mask_indices.
         Args:
@@ -223,18 +207,6 @@ class SingleSpanMasking(InfillingMasking):
         start = np.random.randint(0, length - num_noise_tokens)
         end = start + num_noise_tokens
         return start, end
-
-    def mask_batch(self, inputs: torch.Tensor, lengths: List[int]) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Mask input batch with single span. (MASS-style)
-        Args:
-            inputs: (batch_size, seq_len, num_features)
-            lengths: (batch_size)
-        Returns:
-            inputs: (batch_size, seq_len, num_features)
-            labels: (batch_size, seq_len, num_features)
-        """
-        noise_spans = [[self._get_random_span(length)] for length in lengths]
-        return self._mask_batch_with_noise_spans(inputs, noise_spans)
 
     def mask_for_infilling(self, data: np.ndarray, **kwargs) -> InfillingData:
         """Mask data with single span for infilling. Put a single mask token for the span.
@@ -379,32 +351,6 @@ class RandomBarMasking(InfillingMasking):
             current_noise_tokens += end - start
 
         return noise_bars
-
-    def mask(self, data: np.ndarray, offset: int, **kwargs) -> Tuple[np.ndarray, np.ndarray]:
-        """Mask data with random bars. (MusicBERT-style)
-        Args:
-            data: (seq_len, num_features)
-            bar_spans: (num_bars, 2) array of (start, end) indices
-            offset: offset of data in the original sequence, in case random cropping is used
-        Returns:
-            masked_data: (seq_len, num_features)
-            label: (seq_len, num_features)
-        """
-        # TODO: Use BERT-style masking.
-        label = data.copy()
-        seq_len, _ = data.shape
-
-        bar_spans = kwargs[self.extra_data_field_name]
-        bar_spans = self._process_bar_spans(bar_spans, offset, offset + seq_len)
-        noise_bars = self._get_random_noise_bars(bar_spans, seq_len)
-        noise_bar_spans = bar_spans[noise_bars]
-        mask_indices = np.zeros(seq_len, dtype=bool)
-        for start, end in noise_bar_spans:
-            mask_indices[start:end] = True
-
-        data[mask_indices] = self.tokenizer.mask_token_ids
-        label[~mask_indices] = self.tokenizer.pad_token_ids
-        return data, label
 
     def mask_for_infilling(self, data: np.ndarray, offset: int, **kwargs) -> InfillingData:
         """Mask data with random bars for infilling. Put a single mask token for each bar.
@@ -565,23 +511,6 @@ class RandomNgramMasking(InfillingMasking):
         has_enough_noise_ngrams = current_noise_tokens >= num_noise_tokens
         return noise_ngram_indices, has_enough_noise_ngrams
 
-    def mask(self, data: np.ndarray, offset: int, **kwargs) -> Tuple[np.ndarray, np.ndarray]:
-        """Mask data with random n-grams.
-        Args:
-            data: (seq_len, num_features)
-            ngrams: (num_ngrams, 3) array of (start, length, id)
-            offset: offset of data in the original sequence, in case random cropping is used
-        Returns:
-            masked_data: (seq_len, num_features)
-            label: (seq_len, num_features)
-        """
-        # TODO: Use BERT-style masking.
-        seq_len, _ = data.shape
-        label = data.copy()
-
-        ngrams = kwargs[self.extra_data_field_name]
-        ngrams = self._process_ngram_spans(ngrams, offset, offset + seq_len)
-        noise_ngram_indices, has_enough_noise_ngrams = self._get_random_noise_ngrams(seq_len, ngrams)
 
         # If there are not enough ngrams, fallback to random span masking instead.
         if not has_enough_noise_ngrams:
@@ -589,13 +518,7 @@ class RandomNgramMasking(InfillingMasking):
             return self.random_span_masking.mask(data)
         noise_ngram_spans = ngrams[noise_ngram_indices]
 
-        mask_indices = np.zeros(seq_len, dtype=bool)
-        for start, length, _ in noise_ngram_spans:
-            mask_indices[start : start + length] = True
 
-        data[mask_indices] = self.tokenizer.mask_token_ids
-        label[~mask_indices] = self.tokenizer.pad_token_ids
-        return data, label
 
     def mask_for_infilling(self, data: np.ndarray, offset: int, **kwargs) -> InfillingData:
         """Mask data with random n-grams. Put a single mask token for each n-gram.
