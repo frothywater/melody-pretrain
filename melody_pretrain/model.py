@@ -2,14 +2,14 @@ import os
 from typing import List, Optional, Sequence, Tuple, Union
 
 import lightning as pl
-from lightning.pytorch.callbacks import BasePredictionWriter
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from lightning.pytorch.callbacks import BasePredictionWriter
 
 from .dataset import DataBatch, GeneralDataBatch, ngram_ids_ignore_index, span_indices_padding_index
-from .tokenizer import MIDITokenizer
 from .ngram import get_lexicon_size
+from .tokenizer import MIDITokenizer
 
 
 class CompoundTokenFuser(nn.Module):
@@ -71,24 +71,17 @@ class CompoundTokenFuser(nn.Module):
 class NgramClassificationHead(nn.Module):
     """Extra classification head placed after transformer encoder, used for n-gram prediction."""
 
-    def __init__(self, model_dim: int, ngram_size: Tuple[int, int]) -> None:
+    def __init__(self, model_dim: int, ngram_size: int) -> None:
         super().__init__()
-        self.model_dim = model_dim
-        self.pitch_size, self.rhythm_size = ngram_size
-
-        self.pitch_classifier = nn.Linear(model_dim, self.pitch_size)
-        self.rhythm_classifier = nn.Linear(model_dim, self.rhythm_size)
+        self.classifier = nn.Linear(model_dim, ngram_size)
 
     def forward(self, outputs: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """Args:
             outputs: (batch_size, seq_len, model_dim), transformer encoder outputs
         Returns:
-            pitch_logits: (batch_size, seq_len, pitch_size)
-            rhythm_logits: (batch_size, seq_len, rhythm_size)
+            logits: (batch_size, seq_len, vocab_size)
         """
-        pitch_logits = self.pitch_classifier(outputs)
-        rhythm_logits = self.rhythm_classifier(outputs)
-        return pitch_logits, rhythm_logits
+        return self.classifier(outputs)
 
 
 class SpanPositionalEncoding(nn.Module):
@@ -136,6 +129,7 @@ class MelodyModel(pl.LightningModule):
 
         self.num_features = len(self.tokenizer.field_names)
 
+        self.model_dim = model_dim
         self.num_heads = num_heads
 
         self.fuser = CompoundTokenFuser(self.tokenizer, embedding_dim, model_dim)
@@ -167,15 +161,15 @@ class MelodyModel(pl.LightningModule):
             x: (batch_size, seq_len, num_features)
             padding_mask: (batch_size, seq_len), optional
             attn_mask: (batch_size, seq_len, seq_len), optional
+            span_indices: (batch_size, seq_len), optional, providing positional information for each span
             return_outputs: bool, whether to return transformer encoder outputs
         Returns:
             decoded: list of num_features * (batch_size, seq_len, vocab_size of the feature)
             outputs: (batch_size, seq_len, model_dim), transformer encoder outputs
         """
         x = self.fuser(x)
-        if self.use_span_positional_encoding:
-            encoding = self.span_positional_encoding(span_indices)
-            x = x + encoding
+        if self.use_span_positional_encoding and span_indices is not None:
+            x = x + self.span_positional_encoding(span_indices)
         outputs = self.transformer_encoder(x, src_key_padding_mask=padding_mask, mask=attn_mask)
         decoded = self.fuser.decode(outputs)
         if return_outputs:
@@ -184,7 +178,7 @@ class MelodyModel(pl.LightningModule):
 
     def _get_loss(
         self, logits: List[torch.Tensor], label_ids: torch.Tensor, return_parts: bool = False
-    ) -> torch.Tensor:
+    ) -> Union[torch.Tensor, Tuple[torch.Tensor, List[torch.Tensor]]]:
         losses = []
         for i, logit in enumerate(logits):
             # (batch_size, seq_len, vocab_size) -> (batch_size, vocab_size, seq_len)
@@ -192,12 +186,12 @@ class MelodyModel(pl.LightningModule):
                 logit.transpose(1, 2), label_ids[:, :, i], ignore_index=self.tokenizer.pad_token_ids[i]
             )
             losses.append(loss)
-        loss = torch.mean(torch.stack(losses))
+        loss = torch.stack(losses).mean()
         if return_parts:
             return loss, losses
         return loss
 
-    def _shared_step(self, batch: DatasetBatch, return_outputs: bool = False) -> List[torch.Tensor]:
+    def _get_logits(self, batch: DataBatch, return_outputs: bool = False) -> List[torch.Tensor]:
         """Args:
             batch: DatasetBatch
             return_outputs: bool, whether to return transformer encoder outputs
@@ -221,6 +215,62 @@ class MelodyModel(pl.LightningModule):
         )
 
 
+class TrainingTask:
+    is_main_task: bool = False
+
+    def __init__(self, name: str):
+        self.name = name
+
+    def register_extra_modules(self, model: MelodyModel) -> None:
+        pass
+
+    def __call__(self, model: MelodyModel, batch: DataBatch, **kwargs) -> torch.Tensor:
+        raise NotImplementedError
+
+
+class GeneralTask(TrainingTask):
+    def __init__(self, name: str = "general"):
+        super().__init__(name)
+        self.is_main_task = True
+
+    def __call__(self, model: MelodyModel, batch: DataBatch, **kwargs) -> torch.Tensor:
+        logits, outputs = model._get_logits(batch, return_outputs=True)
+        return model._get_loss(logits, batch.label_ids), outputs
+
+
+class NgramClassificationTask(TrainingTask):
+    def __init__(self, ngram_type: str, name: str = "ngram_classification"):
+        super().__init__(name)
+        assert ngram_type in ("pitch", "rhythm")
+
+    def register_extra_modules(self, model: MelodyModel) -> None:
+        lexicon_path = os.path.join(model.dataset_dir, "ngram_data", "lexicon.pkl")
+        pitch_size, rhythm_size = get_lexicon_size(lexicon_path)
+        ngram_size = pitch_size if self.ngram_type == "pitch" else rhythm_size
+        model.ngram_head = NgramClassificationHead(model.model_dim, ngram_size)
+
+    def __call__(
+        self, model: MelodyModel, batch: DataBatch, model_outputs: Optional[torch.Tensor] = None, **kwargs
+    ) -> torch.Tensor:
+        batch_size, seq_len, _ = model_outputs.shape
+        assert batch.ngram_type == self.ngram_type, "ngram types of batch and task must be the same"
+        assert batch.ngram_ids.shape == (batch_size, seq_len), "label_ids must be of shape (batch_size, seq_len)"
+
+        logits = model.ngram_head(model_outputs)
+        loss = F.cross_entropy(
+            logits.transpose(1, 2), batch.ngram_ids, ignore_index=ngram_ids_ignore_index
+        )
+        return loss
+
+
+class SpanRewritingTask(TrainingTask):
+    def __init__(self, name: str = "span_rewriting"):
+        super().__init__(name)
+
+    def __call__(self, model: MelodyModel, batch: DataBatch, **kwargs) -> torch.Tensor:
+        pass
+
+
 class MelodyPretrainModel(MelodyModel):
     """Use this subclass for pretraining or finetuning the model."""
 
@@ -241,9 +291,9 @@ class MelodyPretrainModel(MelodyModel):
         weight_decay: float,
         warmup_percent: float,
         # Training configuration
+        tasks: List[TrainingTask],
+        task_weights: Optional[List[float]] = None,
         use_span_positional_encoding: bool = False,
-        ngram_classification: bool = False,
-        ngram_classification_weight: float = 0.15,
         **kwargs,
     ) -> None:
         super().__init__(
@@ -262,13 +312,12 @@ class MelodyPretrainModel(MelodyModel):
         self.weight_decay = weight_decay
         self.warmup_percent = warmup_percent
 
-        self.ngram_classification = ngram_classification
-        self.ngram_classification_weight = ngram_classification_weight
-        if ngram_classification:
-            # Check the size of ngram vocabulary
-            lexicon_path = os.path.join(dataset_dir, "ngram_data", "lexicon.pkl")
-            self.pitch_size, self.rhythm_size = get_lexicon_size(lexicon_path)
-            self.ngram_head = NgramClassificationHead(model_dim, ngram_size=(self.pitch_size, self.rhythm_size))
+        self.tasks = tasks
+        self.task_weights = task_weights
+        if self.task_weights is None:
+            self.task_weights = [1.0 / len(self.tasks)] * len(self.tasks)
+        for task in self.tasks:
+            task.register_extra_modules(self)
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr, betas=self.betas, weight_decay=self.weight_decay)
@@ -282,68 +331,46 @@ class MelodyPretrainModel(MelodyModel):
         scheduler = {"scheduler": lr_scheduler, "interval": "step"}
         return [optimizer], [scheduler]
 
-    def ngram_classification_step(
-        self, logits: torch.Tensor, ngram_ids: torch.Tensor, ngram_types: List[str]
-    ) -> torch.Tensor:
-        """Args:
-        logits: (batch_size, seq_len, model_dim)
-        label_ids: (batch_size, seq_len)
-        ngram_types: list of ngram types, each be either "pitch" or "rhythm"
-        """
-        batch_size, seq_len, _ = logits.shape
-        assert len(ngram_types) == batch_size, "ngram_types must be a list of length batch_size"
-        assert ngram_ids.shape == (batch_size, seq_len), "label_ids must be of shape (batch_size, seq_len)"
-        pitch_logits, rhythm_logits = self.ngram_head(logits)
+    def _get_batch_size(self, batch: GeneralDataBatch) -> int:
+        if isinstance(batch, DataBatch):
+            return batch.input_ids.shape[0]
+        # get the first batch in the dict
+        batch = next(iter(batch.values()))
+        return batch.input_ids.shape[0]
 
-        pitch_indices = [i for i, ngram_type in enumerate(ngram_types) if ngram_type == "pitch"]
-        rhythm_indices = [i for i, ngram_type in enumerate(ngram_types) if ngram_type == "rhythm"]
-        # extract corresponding ngram types
-        pitch_logits = pitch_logits[pitch_indices]
-        pitch_label_ids = ngram_ids[pitch_indices]
-        rhythm_logits = rhythm_logits[rhythm_indices]
-        rhythm_label_ids = ngram_ids[rhythm_indices]
+    def _shared_step(self, batch: GeneralDataBatch) -> Tuple[torch.Tensor, List[torch.Tensor]]:
+        if isinstance(batch, DataBatch):
+            assert len(self.tasks) == 1, "Only one task is allowed for DataBatch"
+            return self.tasks[0](self, batch)
 
-        # (batch_size, seq_len, vocab_size) -> (batch_size, vocab_size, seq_len)
-        # use reduction="sum" to avoid averaging over the batch
-        pitch_loss = F.cross_entropy(
-            pitch_logits.transpose(1, 2), pitch_label_ids, reduction="sum", ignore_index=ngram_ids_ignore_index
-        )
-        rhythm_loss = F.cross_entropy(
-            rhythm_logits.transpose(1, 2), rhythm_label_ids, reduction="sum", ignore_index=ngram_ids_ignore_index
-        )
-        # average over the number of non-padding tokens
-        count = torch.count_nonzero(pitch_label_ids != ngram_ids_ignore_index) + torch.count_nonzero(
-            rhythm_label_ids != ngram_ids_ignore_index
-        )
-        return (pitch_loss + rhythm_loss) / count
+        assert self.tasks[0].is_main_task, "The main task must be the first one in the list of tasks"
+        assert len(batch) == len(self.tasks), "The number of tasks must be the same as the number of batches"
 
-    def training_step(self, batch: DatasetBatch, batch_idx: int) -> torch.Tensor:
-        batch_size = len(batch.input_ids)
-        logits, outputs = self._shared_step(batch, return_outputs=True)
-        loss, losses = self._get_loss(logits, batch.label_ids, return_parts=True)
+        losses = []
+        for i, task in enumerate(self.tasks):
+            batch_ = batch[task.name]
+            if task.is_main_task:
+                # Get the model outputs from the main task for the other tasks
+                loss, model_outputs = task(self, batch_)
+            else:
+                loss = task(self, batch_, model_outputs=model_outputs)
+            loss *= self.task_weights[i]
+            losses.append(loss)
+        loss = torch.stack(losses).sum()
+        return loss, losses
 
-        if self.ngram_classification:
-            ngram_classification_loss = self.ngram_classification_step(outputs, batch.ngram_ids, batch.ngram_types)
-            loss += ngram_classification_loss * self.ngram_classification_weight
-            self.log("train_loss:ngram", ngram_classification_loss, sync_dist=True, batch_size=batch_size)
-
-        self.log("train_loss", loss, prog_bar=True, sync_dist=True, batch_size=batch_size)
-        self.log_dict(
-            {f"train_loss:{self.tokenizer.field_names[i]}": loss for i, loss in enumerate(losses)},
-            sync_dist=True,
-            batch_size=batch_size,
-        )
+    def training_step(self, batch: GeneralDataBatch, batch_idx: int) -> torch.Tensor:
+        batch_size = self._get_batch_size(batch)
+        loss, losses = self._shared_step(batch)
+        self.log("train_loss", loss, sync_dist=True, batch_size=batch_size)
+        if len(self.tasks) > 1:
+            for task, task_loss in zip(self.tasks, losses):
+                self.log(f"train_loss:{task.name}", task_loss, sync_dist=True, batch_size=batch_size)
         return loss
 
-    def validation_step(self, batch: DatasetBatch, batch_idx: int) -> torch.Tensor:
-        batch_size = len(batch.input_ids)
-        logits, outputs = self._shared_step(batch, return_outputs=True)
-        loss = self._get_loss(logits, batch.label_ids)
-
-        if self.ngram_classification:
-            ngram_classification_loss = self.ngram_classification_step(outputs, batch.ngram_ids, batch.ngram_types)
-            loss += ngram_classification_loss * self.ngram_classification_weight
-
+    def validation_step(self, batch: GeneralDataBatch, batch_idx: int) -> torch.Tensor:
+        batch_size = self._get_batch_size(batch)
+        loss, _ = self._shared_step(batch)
         self.log("val_loss", loss, sync_dist=True, batch_size=batch_size)
         return loss
 
