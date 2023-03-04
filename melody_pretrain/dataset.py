@@ -804,7 +804,7 @@ class DataCollatorForPrefixMaskedLanguageModeling(DataCollator):
         permutated_infilling: bool = False,
         span_independent_infilling: bool = False,
         ngram_classification: bool = False,
-        ngram_field_specific_masking: bool = False,
+        ngram_field_specific_masking: bool = True,
     ):
         super().__init__(seq_len, random_crop)
         self.masking = masking
@@ -1084,7 +1084,7 @@ class MelodyPretrainDataModule(pl.LightningDataModule):
         num_workers: int = 0,
         load_bar_data: bool = False,
         load_ngram_data: bool = False,
-        pitch_augumentation: bool = False,
+        pitch_augumentation: bool = True,
     ):
         super().__init__()
         self.dataset_dir = dataset_dir
