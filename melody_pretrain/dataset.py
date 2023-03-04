@@ -129,31 +129,6 @@ class InfillingMasking(Masking):
         raise NotImplementedError
 
 
-class MultiTargetInfillingMasking(InfillingMasking):
-    """Randomly choose a masking strategy for each batch."""
-
-    def __init__(self, maskings: Tuple[InfillingMasking, ...], probabilities: Tuple[float, ...]):
-        assert len(maskings) == len(probabilities), "Number of maskings should be the same as number of probabilities"
-        self.maskings = maskings
-        # normalize probabilities
-        self.probabilities = np.array(probabilities) / sum(probabilities)
-        self.need_to_mask_per_data = any(masking.need_to_mask_per_data for masking in maskings)
-
-    def setup_tokenizer(self, tokenizer: MIDITokenizer):
-        for masking in self.maskings:
-            masking.setup_tokenizer(tokenizer)
-
-    def mask(self, data: np.ndarray, **kwargs) -> Tuple[np.ndarray, np.ndarray]:
-        index = np.random.choice(len(self.maskings), p=self.probabilities)
-        masking = self.maskings[index]
-        return masking.mask(data, **kwargs)
-
-    def mask_for_infilling(self, data: np.ndarray, **kwargs) -> InfillingData:
-        index = np.random.choice(len(self.maskings), p=self.probabilities)
-        masking = self.maskings[index]
-        return masking.mask_for_infilling(data, **kwargs)
-
-
 class RandomTokenMasking(Masking):
     def __init__(self, corruption_rate: float = 0.15):
         super().__init__()
@@ -637,6 +612,23 @@ class DataCollator:
                 data = np.concatenate([data, pad], axis=0)
             result.append(data)
         return result
+
+
+class DataCollatorForMultipleTasks(DataCollator):
+    """Ensembles multiple data collators as one.
+    Returns a dictionary of data batches."""
+
+    def __init__(self, names: List[str], collators: List[DataCollator]):
+        super().__init__()
+        self.names = names
+        self.collators = collators
+
+    def setup_tokenizer(self, tokenizer: MIDITokenizer):
+        for collator in self.collators:
+            collator.setup_tokenizer(tokenizer)
+
+    def __call__(self, batch: List[DatasetItem]) -> Dict[str, DataBatch]:
+        return {name: collator(batch) for name, collator in zip(self.names, self.collators)}
 
 
 class DataCollatorForPaddingOnly(DataCollator):
