@@ -129,14 +129,41 @@ class Masking:
             len(noise_spans) == batch_size
         ), f"Noise spans should have the same length as batch size, but got {len(noise_spans)} != {batch_size}"
 
-        mask_indices = torch.zeros(mask_shape, dtype=torch.bool, device=inputs.device)
-        for i, spans in enumerate(noise_spans):
-            for start, end in spans:
-                mask_indices[i, start:end] = True
+        # See all noise spans in the batch as a whole, and choose spans to mask, replace, and keep unchanged
+        span_positions = []
+        for item_index, spans in enumerate(noise_spans):
+            span_positions += [(item_index, start, end) for start, end in spans]
 
-        labels[~mask_indices] = self.pad_token_tensor
-        inputs[mask_indices] = self.mask_token_tensor
-        return inputs, labels
+        num_total_spans = len(span_positions)
+        span_positions = np.array(span_positions)
+        np.random.shuffle(span_positions)
+
+        # 80% of the time, we replace masked input tokens with tokenizer.mask_token ([MASK])
+        num_masking_spans = int(num_total_spans * 0.8)
+        masking_span_positions = span_positions[:num_masking_spans]
+        for item_index, start, end in masking_span_positions:
+            inputs[item_index, start:end] = self.mask_token_tensor
+
+        # 10% of the time, we replace masked input tokens with random word
+        num_replacing_spans = int(num_total_spans * 0.1)
+        replacing_span_positions = span_positions[num_masking_spans : num_masking_spans + num_replacing_spans]
+        replacing_indices = torch.zeros(mask_shape, dtype=torch.bool, device=inputs.device)
+        for item_index, start, end in replacing_span_positions:
+            replacing_indices[item_index, start:end] = True
+        random_words = torch.stack(
+            [torch.randint(size, mask_shape, dtype=inputs.dtype) for size in self.tokenizer.vocab_sizes],
+            dim=-1,
+        )
+        inputs[replacing_indices] = random_words[replacing_indices]
+
+        # Build boolean mask for all noise spans, and set labels
+        noise_indices = torch.zeros(mask_shape, dtype=torch.bool, device=inputs.device)
+        for item_index, spans in enumerate(noise_spans):
+            for start, end in spans:
+                noise_indices[item_index, start:end] = True
+        labels[~noise_indices] = self.pad_token_tensor
+
+        return MaskedData(inputs, labels)
 
     def mask(self, data: np.ndarray, **kwargs) -> Tuple[np.ndarray, np.ndarray]:
         raise NotImplementedError
@@ -268,18 +295,14 @@ class RandomSpanMasking(InfillingMasking):
         span_ends = span_starts + interleaved_span_lengths
         return list(zip(span_starts, span_ends))
 
-    def mask_batch(self, inputs: torch.Tensor, lengths: List[int]) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Mask input batch with random spans. (SpanBERT-style)
-        Args:
-            inputs: (batch_size, seq_len, num_features)
-            lengths: (batch_size)
-        Returns:
-            inputs: (batch_size, seq_len, num_features)
-            labels: (batch_size, seq_len, num_features)
-        """
-        # TODO: Use BERT-style masking.
-        noise_spans = [self._get_random_spans(length)[1::2] for length in lengths]
-        return self._mask_batch_with_noise_spans(inputs, noise_spans)
+    def mask_batch(self, inputs: torch.Tensor, lengths: List[int], **kwargs) -> Tuple[torch.Tensor, torch.Tensor]:
+        noise_spans_list = []
+        for i, length in enumerate(lengths):
+            spans = self._get_random_spans(length)
+            noise_spans = [span for i, span in enumerate(spans) if i % 2 == 1]
+            noise_spans_list.append(noise_spans)
+
+        return self._mask_batch_with_noise_spans(inputs, noise_spans_list)
 
     def mask_for_infilling(self, data: np.ndarray, **kwargs) -> InfillingData:
         """Mask data with random spans for infilling. Put a single mask token for each span. (T5-style)
@@ -507,14 +530,18 @@ class RandomNgramMasking(InfillingMasking):
         has_enough_noise_ngrams = current_noise_tokens >= num_noise_tokens
         return noise_ngram_indices, has_enough_noise_ngrams
 
+    def mask_batch(
+        self, inputs: torch.Tensor, lengths: List[int], offsets: List[int], **kwargs
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        noise_spans_list = []
+        ngrams_list = kwargs[self.extra_data_field_name]
+        for i, (length, offset, ngrams) in enumerate(zip(lengths, offsets, ngrams_list)):
+            ngrams = self._process_ngram_spans(ngrams, offset, offset + length)
+            noise_ngram_indices, has_enough_noise_ngrams = self._get_random_noise_ngrams(length, ngrams)
+            noise_ngram_spans = ngrams[noise_ngram_indices]
+            noise_spans_list.append(noise_ngram_spans)
 
-        # If there are not enough ngrams, fallback to random span masking instead.
-        if not has_enough_noise_ngrams:
-            # TODO: Yet to implement single random span masking.
-            return self.random_span_masking.mask(data)
-        noise_ngram_spans = ngrams[noise_ngram_indices]
-
-
+        return self._mask_batch_with_noise_spans(inputs, noise_spans_list)
 
     def mask_for_infilling(self, data: np.ndarray, offset: int, **kwargs) -> InfillingData:
         """Mask data with random n-grams. Put a single mask token for each n-gram.
