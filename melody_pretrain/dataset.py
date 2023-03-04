@@ -1,6 +1,6 @@
 import os
 from glob import glob
-from typing import Dict, List, NamedTuple, Optional, Tuple
+from typing import Dict, List, NamedTuple, Optional, Tuple, Union
 
 import lightning as pl
 import numpy as np
@@ -15,8 +15,20 @@ span_indices_padding_index = 0
 
 
 class DatasetItem(NamedTuple):
+    """A single dataset item to be processed by data collator.
+    Allow extra data to be attached to the item."""
+
     data: np.ndarray
     extra_data: Dict[str, np.ndarray]
+
+
+class MaskedData(NamedTuple):
+    """Used for MLM, the data is a pair of (inputs, labels).
+    Allow extra data to be attached to the data pair.
+    """
+
+    inputs: torch.Tensor
+    labels: torch.Tensor
 
 
 class InfillingData(NamedTuple):
@@ -26,17 +38,21 @@ class InfillingData(NamedTuple):
 
     sources: List[np.ndarray]
     targets: List[np.ndarray]
+    # Used for permutated span prediction
     target_span_indices: List[int]
 
+    # Used for explicit ngram prediction
     ngram_type: Optional[str] = None
     ngram_ids: Optional[List[int]] = None
 
+    # Used for specific field prediction in our ngram masking
     field_padding_indices: Optional[List[int]] = None
 
     # Indicate whether the masked span is used for CLM
     is_long_mask: bool = False
 
-class DatasetBatch(NamedTuple):
+
+class DataBatch(NamedTuple):
     """A batch of data for training. Allow extra data to be attached to the batch.
     Note that in PyTorch's padding mask and attention mask, True means to ignore."""
 
@@ -45,14 +61,19 @@ class DatasetBatch(NamedTuple):
     padding_mask: torch.Tensor
     attention_mask: Optional[torch.Tensor] = None
 
+    # Used for explicit ngram prediction
     ngram_types: Optional[List[str]] = None
     ngram_ids: Optional[torch.Tensor] = None
 
+    # Used for permutated span prediction
     span_indices: Optional[torch.Tensor] = None
 
 
-class Masking:
+DataBatchDict = Dict[str, DataBatch]
+GeneralDataBatch = Union[DataBatch, DataBatchDict]
 
+
+class Masking:
     # For MLM, this field indicates whether the strategy needs to perform masking on each sequence separately,
     # if not, the strategy will perform masking on the whole batch.
     # For text infilling, masking is always performed on each sequence separately.
@@ -120,7 +141,7 @@ class Masking:
     def mask(self, data: np.ndarray, **kwargs) -> Tuple[np.ndarray, np.ndarray]:
         raise NotImplementedError
 
-    def mask_batch(self, inputs: torch.Tensor, lengths: List[int]) -> Tuple[torch.Tensor, torch.Tensor]:
+    def mask_batch(self, inputs: torch.Tensor, lengths: List[int], **kwargs) -> MaskedData:
         raise NotImplementedError
 
 
@@ -168,7 +189,7 @@ class RandomTokenMasking(Masking):
         inputs[indices_random] = random_words[indices_random]
 
         # The rest of the time (10% of the time) we keep the masked input tokens unchanged
-        return inputs, labels
+        return MaskedData(inputs, labels)
 
 
 class SingleSpanMasking(InfillingMasking):
@@ -352,7 +373,7 @@ class RandomBarMasking(InfillingMasking):
         return InfillingData(sources, targets, target_span_indices)
 
 
-class FixedBarMasking(RandomBarMasking):
+class FixedBarMasking(InfillingMasking):
     need_to_mask_per_data = True
 
     def __init__(
@@ -637,7 +658,7 @@ class DataCollatorForPaddingOnly(DataCollator):
     def __init__(self, seq_len: Optional[int] = None):
         super().__init__(seq_len)
 
-    def __call__(self, batch: List[DatasetItem]) -> DatasetBatch:
+    def __call__(self, batch: List[DatasetItem]) -> DataBatch:
         # TODO: Consider right side padding for batch inference?
         data_list = [item.data for item in batch]
         data_list, _ = self.truncate(data_list, self.seq_len)
@@ -647,7 +668,7 @@ class DataCollatorForPaddingOnly(DataCollator):
             [[0] * len(data) + [1] * (self.seq_len - len(data)) for data in data_list], dtype=torch.bool
         )
 
-        return DatasetBatch(input_ids, label_ids=None, padding_mask=padding_mask)
+        return DataBatch(input_ids, label_ids=None, padding_mask=padding_mask)
 
 
 class DataCollatorForInfilling(DataCollator):
@@ -662,7 +683,7 @@ class DataCollatorForInfilling(DataCollator):
         super().setup_tokenizer(tokenizer)
         self.masking.setup_tokenizer(tokenizer)
 
-    def __call__(self, batch: List[DatasetItem]) -> DatasetBatch:
+    def __call__(self, batch: List[DatasetItem]) -> DataBatch:
         data_list = [item.data for item in batch]
         extra_data_list = [item.extra_data for item in batch]
         # Only collect masked data
@@ -679,14 +700,14 @@ class DataCollatorForInfilling(DataCollator):
             [[0] * len(data) + [1] * (seq_len - len(masked_data)) for masked_data in masked_data_list], dtype=torch.bool
         )
 
-        return DatasetBatch(input_ids, label_ids=None, padding_mask=padding_mask)
+        return DataBatch(input_ids, label_ids=None, padding_mask=padding_mask)
 
 
 class DataCollatorForCausalLanguageModeling(DataCollator):
     def __init__(self, seq_len: Optional[int] = None, random_crop: bool = False):
         super().__init__(seq_len, random_crop)
 
-    def __call__(self, batch: List[DatasetItem]) -> DatasetBatch:
+    def __call__(self, batch: List[DatasetItem]) -> DataBatch:
         data_list = [item.data for item in batch]
 
         if self.seq_len is not None:
@@ -704,7 +725,7 @@ class DataCollatorForCausalLanguageModeling(DataCollator):
         padding_mask = torch.zeros((batch_size, seq_len), dtype=torch.bool)
         for i, length in enumerate(lengths):
             padding_mask[i, length:] = True
-        return DatasetBatch(input_ids, label_ids, padding_mask, attention_mask)
+        return DataBatch(input_ids, label_ids, padding_mask, attention_mask)
 
 
 class DataCollatorForMaskedLanguageModeling(DataCollator):
@@ -716,7 +737,7 @@ class DataCollatorForMaskedLanguageModeling(DataCollator):
         super().setup_tokenizer(tokenizer)
         self.masking.setup_tokenizer(tokenizer)
 
-    def __call__(self, batch: List[DatasetItem]) -> DatasetBatch:
+    def __call__(self, batch: List[DatasetItem]) -> DataBatch:
         data_list = [item.data for item in batch]
         extra_data_list = [item.extra_data for item in batch]
 
@@ -735,14 +756,16 @@ class DataCollatorForMaskedLanguageModeling(DataCollator):
         else:
             # pad, and then mask all data together
             batch = torch.from_numpy(np.stack(self.pad(data_list), axis=0)).long()
-            input_ids, label_ids = self.masking.mask_batch(batch, lengths)
+            # get dict of extra data list from list of extra data dict
+            extra_data = {k: [d[k] for d in extra_data_list] for k in extra_data_list[0]}
+            input_ids, label_ids = self.masking.mask_batch(batch, lengths, offsets=offsets, **extra_data)
 
         # bidirectional attention mask
         batch_size, seq_len, _ = input_ids.shape
         padding_mask = torch.zeros((batch_size, seq_len), dtype=torch.bool)
         for i, length in enumerate(lengths):
             padding_mask[i, length:] = True
-        return DatasetBatch(input_ids, label_ids, padding_mask)
+        return DataBatch(input_ids, label_ids, padding_mask)
 
 
 class DataCollatorForPrefixMaskedLanguageModeling(DataCollator):
@@ -820,7 +843,6 @@ class DataCollatorForPrefixMaskedLanguageModeling(DataCollator):
         sep_positions: List[int],
         field_padding_indices: Optional[List[int]],
     ) -> Tuple[np.ndarray, np.ndarray]:
-
         if self.ngram_field_specific_masking and field_padding_indices is not None:
             target_labels = target.copy()
             # pad target with field padding indices, only on non [SEP] positions
@@ -891,7 +913,7 @@ class DataCollatorForPrefixMaskedLanguageModeling(DataCollator):
             span_indices[sep_position + source_length] = i + 1
         return torch.from_numpy(span_indices).long()
 
-    def __call__(self, batch: List[DatasetItem]) -> DatasetBatch:
+    def __call__(self, batch: List[DatasetItem]) -> DataBatch:
         data_list = [item.data for item in batch]
         extra_data_list = [item.extra_data for item in batch]
 
@@ -981,7 +1003,7 @@ class DataCollatorForPrefixMaskedLanguageModeling(DataCollator):
         else:
             span_indices = None
 
-        return DatasetBatch(
+        return DataBatch(
             input_ids,
             label_ids,
             padding_mask,
