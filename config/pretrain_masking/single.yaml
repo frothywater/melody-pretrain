@@ -3,9 +3,10 @@ trainer:
   default_root_dir: experiment/model/pretrain_single
 model:
   dataset_dir: experiment/dataset/pretrain_base
+  tasks:
+    - GeneralTask
 data:
   dataset_dir: experiment/dataset/pretrain_base
-  pitch_augumentation: true
   data_collator:
     class_path: DataCollatorForPrefixMaskedLanguageModeling
     init_args:

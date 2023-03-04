@@ -3,8 +3,9 @@ seed_everything: 42
 trainer:
   max_steps: 5000
   accelerator: gpu
+  devices: 4
   precision: 16
-  accumulate_grad_batches: 4
+  accumulate_grad_batches: 5
   gradient_clip_val: 1.0
   log_every_n_steps: 1
   strategy:
@@ -21,10 +22,11 @@ trainer:
     - class_path: ModelCheckpoint
       init_args:
         every_n_train_steps: 1000
-        save_on_train_epoch_end: true
-        filename: "{step}.ckpt"
+        save_top_k: -1
+        save_weights_only: true
+        filename: "{step}"
 data:
-  batch_size: 56
+  batch_size: 20
   num_workers: 4
 
 # debug
