@@ -1,6 +1,4 @@
 # lightning.pytorch==1.8.3.post1
-trainer:
-  default_root_dir: experiment/model/pretrain_ngram_plus
 model:
   dataset_dir: experiment/dataset/pretrain_base
   use_span_positional_encoding: true

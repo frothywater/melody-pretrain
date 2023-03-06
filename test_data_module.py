@@ -30,8 +30,8 @@ if __name__ == "__main__":
         masking=RandomNgramMasking(corruption_rate=0.3, extra_data_field_name="pitch_ngrams"),
         seq_len=25,
         random_crop=True,
-        ngram_classification=True,
-        permutated_infilling=True,
+        # ngram_classification=True,
+        # permutated_infilling=True,
     )
     single_span_data_collator = DataCollatorForPrefixMaskedLanguageModeling(
         masking=SingleSpanMasking(corruption_rate=0.5),
@@ -40,7 +40,7 @@ if __name__ == "__main__":
     )
     data_collator = DataCollatorForMultipleTasks(
         collators=[ngram_data_collator, single_span_data_collator],
-        task_names=["ngram", "single_span"],
+        names=["ngram", "single_span"],
     )
 
     data_module = MelodyPretrainDataModule(
@@ -57,8 +57,8 @@ if __name__ == "__main__":
     for batches in data_module.test_dataloader():
         for name, batch in batches.items():
             print(f"task: {name}")
-            print("ngram_types:")
-            print(batch.ngram_types)
+            print("ngram_type:")
+            print(batch.ngram_type)
             print("input_ids:")
             print(batch.input_ids)
             print("label_ids:")

@@ -16,7 +16,7 @@ class CustomLightningCLI(LightningCLI):
         load_from_checkpoint_path = self.config.fit.load_from_checkpoint
         if load_from_checkpoint_path is not None:
             checkpoint = torch.load(load_from_checkpoint_path)
-            self.model.load_state_dict(checkpoint["state_dict"])
+            self.model.load_state_dict(checkpoint["state_dict"], strict=False)
             print("Loaded model from checkpoint:", load_from_checkpoint_path)
 
 

@@ -9,7 +9,6 @@ from torch.utils.data import DataLoader, Dataset
 
 from .tokenizer import MIDITokenizer
 
-
 ngram_ids_ignore_index = -100
 span_indices_padding_index = 0
 
@@ -563,6 +562,9 @@ class RandomNgramMasking(InfillingMasking):
         for i, (length, offset, ngrams) in enumerate(zip(lengths, offsets, ngrams_list)):
             ngrams = self._process_ngram_spans(ngrams, offset, offset + length)
             noise_ngram_indices, has_enough_noise_ngrams = self._get_random_noise_ngrams(length, ngrams)
+
+            # TODO: Handle the case when there are not enough ngrams
+
             noise_ngram_spans = ngrams[noise_ngram_indices]
             noise_spans_list.append(noise_ngram_spans)
 
@@ -580,9 +582,7 @@ class RandomNgramMasking(InfillingMasking):
         ngrams = self._process_ngram_spans(ngrams, offset, offset + seq_len)
         noise_ngram_indices, has_enough_noise_ngrams = self._get_random_noise_ngrams(seq_len, ngrams)
 
-        # If there are not enough ngrams, fallback to random span masking instead.
-        if not has_enough_noise_ngrams:
-            return self.random_span_masking.mask_for_infilling(data)
+        # TODO: Handle the case when there are not enough ngrams
 
         # Sort by start index
         noise_ngram_spans = ngrams[noise_ngram_indices]
