@@ -270,7 +270,7 @@ class SingleSpanMasking(InfillingMasking):
 
 
 class RandomSpanMasking(InfillingMasking):
-    def __init__(self, corruption_rate: float = 0.15, mean_span_length: int = 3):
+    def __init__(self, corruption_rate: float = 0.15, mean_span_length: int = 5):
         super().__init__()
         self.corruption_rate = corruption_rate
         self.mean_span_length = mean_span_length
