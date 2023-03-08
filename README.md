@@ -17,8 +17,8 @@ python lexicon.py render \
 (Keep tokenizer configs the same between pretrain and finetune stages.)
 ```bash
 python prepare_data.py \
---midi_dir experiment/dataset/pretrain_base/midi \
---dataset_dir experiment/dataset/pretrain_base \
+--midi_dir experiment/dataset/pretrain_base_ngram/midi \
+--dataset_dir experiment/dataset/pretrain_base_ngram \
 --granularity 64 --max_bar 128 --pitch_range 0 128
 
 python prepare_data.py \

@@ -2,37 +2,25 @@
 model:
   dataset_dir: experiment/dataset/pretrain_base
   tasks:
-    - class_path: GeneralTask
-      init_args:
-        name: pitch_ngram
-    - class_path: GeneralTask
-      init_args:
-        name: rhythm_ngram
+    - GeneralTask
 data:
   dataset_dir: experiment/dataset/pretrain_base
   load_ngram_data: true
   data_collator:
-    class_path: DataCollatorForMultipleTasks
+    class_path: DataCollatorForPrefixMaskedLanguageModeling
     init_args:
-      names:
-        - pitch_ngram
-        - rhythm_ngram
-      collators:
-        - class_path: DataCollatorForPrefixMaskedLanguageModeling
-          init_args:
-            seq_len: 512
-            random_crop: true
-            masking:
-              class_path: RandomNgramMasking
+      seq_len: 512
+      random_crop: true
+      masking:
+        class_path: MultiTargetInfillingMasking
+        init_args:
+          probabilities: [0.5, 0.5]
+          maskings:
+            - class_path: RandomNgramMasking
               init_args:
-                corruption_rate: 0.25
+                corruption_rate: 0.7
                 extra_data_field_name: pitch_ngrams
-        - class_path: DataCollatorForPrefixMaskedLanguageModeling
-          init_args:
-            seq_len: 512
-            random_crop: true
-            masking:
-              class_path: RandomNgramMasking
+            - class_path: RandomNgramMasking
               init_args:
-                corruption_rate: 0.25
+                corruption_rate: 0.7
                 extra_data_field_name: rhythm_ngrams
