@@ -270,7 +270,7 @@ class SingleSpanMasking(InfillingMasking):
 
 
 class RandomSpanMasking(InfillingMasking):
-    def __init__(self, corruption_rate: float = 0.15, mean_span_length: int = 5):
+    def __init__(self, corruption_rate: float = 0.15, mean_span_length: int = 4):
         super().__init__()
         self.corruption_rate = corruption_rate
         self.mean_span_length = mean_span_length
@@ -485,7 +485,7 @@ class RandomNgramMasking(InfillingMasking):
         self,
         corruption_rate: float = 0.15,
         extra_data_field_name: str = "ngrams",
-        fallback_mean_span_length: int = 3,
+        fallback_mean_span_length: int = 4,
     ):
         """Args:
         corruption_rate: corruption rate of ngram masking.
@@ -582,7 +582,8 @@ class RandomNgramMasking(InfillingMasking):
         ngrams = self._process_ngram_spans(ngrams, offset, offset + seq_len)
         noise_ngram_indices, has_enough_noise_ngrams = self._get_random_noise_ngrams(seq_len, ngrams)
 
-        # TODO: Handle the case when there are not enough ngrams
+        if not has_enough_noise_ngrams:
+            return self.random_span_masking.mask_for_infilling(data)
 
         # Sort by start index
         noise_ngram_spans = ngrams[noise_ngram_indices]

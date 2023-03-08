@@ -21,6 +21,7 @@ class CustomLightningCLI(LightningCLI):
 
 
 def cli_main():
+    torch.set_float32_matmul_precision("high")
     _ = CustomLightningCLI(datamodule_class=MelodyPretrainDataModule, save_config_kwargs={"overwrite": True})
 
 
