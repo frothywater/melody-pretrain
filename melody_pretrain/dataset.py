@@ -68,10 +68,6 @@ class DataBatch(NamedTuple):
     span_indices: Optional[torch.Tensor] = None
 
 
-DataBatchDict = Dict[str, DataBatch]
-GeneralDataBatch = Union[DataBatch, DataBatchDict]
-
-
 class Masking:
     # For MLM, this field indicates whether the strategy needs to perform masking on each sequence separately,
     # if not, the strategy will perform masking on the whole batch.
@@ -194,6 +190,11 @@ class MultiTargetInfillingMasking(InfillingMasking):
         index = np.random.choice(len(self.maskings), p=self.probabilities)
         masking = self.maskings[index]
         return masking.mask(data, **kwargs)
+
+    def mask_batch(self, inputs: torch.Tensor, lengths: List[int], **kwargs) -> MaskedData:
+        index = np.random.choice(len(self.maskings), p=self.probabilities)
+        masking = self.maskings[index]
+        return masking.mask_batch(inputs, lengths, **kwargs)
 
     def mask_for_infilling(self, data: np.ndarray, **kwargs) -> InfillingData:
         index = np.random.choice(len(self.maskings), p=self.probabilities)
@@ -479,8 +480,6 @@ class FixedBarMasking(InfillingMasking):
 
 
 class RandomNgramMasking(InfillingMasking):
-    need_to_mask_per_data = True
-
     def __init__(
         self,
         corruption_rate: float = 0.15,
@@ -563,9 +562,12 @@ class RandomNgramMasking(InfillingMasking):
             ngrams = self._process_ngram_spans(ngrams, offset, offset + length)
             noise_ngram_indices, has_enough_noise_ngrams = self._get_random_noise_ngrams(length, ngrams)
 
-            # TODO: Handle the case when there are not enough ngrams
-
-            noise_ngram_spans = ngrams[noise_ngram_indices]
+            if not has_enough_noise_ngrams:
+                noise_ngram_spans = self.random_span_masking._get_random_spans(length)[1::2]
+            else:
+                starts = ngrams[noise_ngram_indices, 0]
+                lengths = ngrams[noise_ngram_indices, 1]
+                noise_ngram_spans = np.stack([starts, lengths], axis=1)
             noise_spans_list.append(noise_ngram_spans)
 
         return self._mask_batch_with_noise_spans(inputs, noise_spans_list)
@@ -1088,7 +1090,6 @@ class MelodyPretrainDataModule(pl.LightningDataModule):
     def __init__(
         self,
         dataset_dir: str,
-        data_collator: DataCollator,
         batch_size: int,
         num_workers: int = 0,
         load_bar_data: bool = False,
@@ -1102,84 +1103,64 @@ class MelodyPretrainDataModule(pl.LightningDataModule):
             raise ValueError(f"Tokenizer config file not found: {tokenizer_config_path}")
         self.tokenizer = MIDITokenizer.from_config(tokenizer_config_path)
 
-        self.data_collator = data_collator
-        self.data_collator.setup_tokenizer(self.tokenizer)
-
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.load_bar_data = load_bar_data
         self.load_ngram_data = load_ngram_data
         self.pitch_augumentation = pitch_augumentation
 
-    def setup(self, stage: str):
-        self.train_dir = os.path.join(self.dataset_dir, "train")
-        self.valid_dir = os.path.join(self.dataset_dir, "valid")
-        self.test_dir = os.path.join(self.dataset_dir, "test")
-        self.train_dataset = MelodyDataset(
-            self.train_dir,
+        self.data_collators: Dict[str, DataCollator] = {}
+
+    def _make_dataset(self, data_dir: str):
+        dataset = MelodyDataset(
+            data_dir,
             load_bar_data=self.load_bar_data,
             load_ngram_data=self.load_ngram_data,
             pitch_augumentation=self.pitch_augumentation,
         )
-        self.train_dataset.setup_tokenizer(self.tokenizer)
+        dataset.setup_tokenizer(self.tokenizer)
+        return dataset
+
+    def _make_data_loader(self, split_name: str):
+        if split_name not in self.datasets:
+            return None
+
+        def _make_one(task_name: str):
+            # batch_size=1 for prediction currently
+            return DataLoader(
+                self.datasets[split_name],
+                batch_size=self.batch_size if split_name != "predict" else 1,
+                shuffle=split_name == "train",
+                drop_last=split_name == "train",
+                collate_fn=self.data_collators[task_name],
+                num_workers=self.num_workers,
+                pin_memory=True,
+            )
+
+        return {task_name: _make_one(task_name) for task_name in self.data_collators}
+
+    def setup(self, stage: str):
+        self.train_dir = os.path.join(self.dataset_dir, "train")
+        self.valid_dir = os.path.join(self.dataset_dir, "valid")
+        self.test_dir = os.path.join(self.dataset_dir, "test")
+        self.datasets = {"train": self._make_dataset(self.train_dir)}
         if os.path.exists(self.valid_dir):
-            self.valid_dataset = MelodyDataset(
-                self.valid_dir,
-                load_bar_data=self.load_bar_data,
-                load_ngram_data=self.load_ngram_data,
-                pitch_augumentation=self.pitch_augumentation,
-            )
-            self.valid_dataset.setup_tokenizer(self.tokenizer)
+            self.datasets["valid"] = self._make_dataset(self.valid_dir)
         if os.path.exists(self.test_dir):
-            self.test_dataset = MelodyDataset(
-                self.test_dir,
-                load_bar_data=self.load_bar_data,
-                load_ngram_data=self.load_ngram_data,
-                pitch_augumentation=self.pitch_augumentation,
-            )
-            self.test_dataset.setup_tokenizer(self.tokenizer)
+            self.datasets["test"] = self._make_dataset(self.test_dir)
+
+    def register_task(self, task_name: str, collator: DataCollator):
+        self.data_collators[task_name] = collator
+        self.data_collators[task_name].setup_tokenizer(self.tokenizer)
 
     def train_dataloader(self):
-        return DataLoader(
-            self.train_dataset,
-            batch_size=self.batch_size,
-            shuffle=True,
-            drop_last=True,
-            collate_fn=self.data_collator,
-            num_workers=self.num_workers,
-            pin_memory=True,
-        )
+        return self._make_data_loader("train")
 
     def val_dataloader(self):
-        if not os.path.exists(self.valid_dir):
-            return None
-        return DataLoader(
-            self.valid_dataset,
-            batch_size=self.batch_size,
-            collate_fn=self.data_collator,
-            num_workers=self.num_workers,
-            pin_memory=True,
-        )
+        return self._make_data_loader("valid")
 
     def test_dataloader(self):
-        if not os.path.exists(self.test_dir):
-            return None
-        return DataLoader(
-            self.test_dataset,
-            batch_size=self.batch_size,
-            collate_fn=self.data_collator,
-            num_workers=self.num_workers,
-            pin_memory=True,
-        )
+        return self._make_data_loader("test")
 
     def predict_dataloader(self):
-        if not os.path.exists(self.test_dir):
-            return None
-        # batch_size=1 for prediction currently
-        return DataLoader(
-            self.test_dataset,
-            batch_size=1,
-            collate_fn=self.data_collator,
-            num_workers=self.num_workers,
-            pin_memory=True,
-        )
+        return self._make_data_loader("predict")

@@ -1,5 +1,5 @@
 import os
-from typing import List, Optional, Sequence, Tuple, Union
+from typing import List, Dict, Optional, Sequence, Tuple, Union
 
 import lightning as pl
 import torch
@@ -7,101 +7,14 @@ import torch.nn as nn
 import torch.nn.functional as F
 from lightning.pytorch.callbacks import BasePredictionWriter
 
-from .dataset import DataBatch, GeneralDataBatch, ngram_ids_ignore_index, span_indices_padding_index
-from .ngram import get_lexicon_size
+from .dataset import DataBatch
 from .tokenizer import MIDITokenizer
+from .task import TrainingTask
+from .module import CompoundTokenFuser, SpanPositionalEncoding
+from .utils import top_k_sample
 
 
-class CompoundTokenFuser(nn.Module):
-    """Fuses multiple token embeddings into a single embedding."""
-
-    def __init__(self, tokenizer: MIDITokenizer, embedding_dim: Union[int, Tuple[int, ...]], model_dim: int) -> None:
-        super().__init__()
-        self.tokenizer = tokenizer
-        self.num_features = len(tokenizer.field_names)
-        self.field_sizes = tokenizer.field_sizes
-        self.total_field_size = sum(self.field_sizes)
-
-        self.model_dim = model_dim
-        if isinstance(embedding_dim, int):
-            self.embedding_dims = [embedding_dim for _ in range(self.num_features)]
-        else:
-            assert len(embedding_dim) == self.num_features, "embedding_dim must be int or list of length num_features"
-            self.embedding_dims = embedding_dim
-        self.total_embedding_dim = sum(self.embedding_dims)
-
-        self.embeddings = nn.ModuleList(
-            [
-                nn.Embedding(num_embeddings=field_size, embedding_dim=embedding_dim_, padding_idx=pad_token_id)
-                for field_size, embedding_dim_, pad_token_id in zip(
-                    self.field_sizes, self.embedding_dims, tokenizer.pad_token_ids
-                )
-            ]
-        )
-        self.encoder = nn.Linear(self.total_embedding_dim, model_dim)
-        self.decoder = nn.Linear(model_dim, self.total_field_size)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Args:
-            input_ids: (batch_size, seq_len, num_features)
-        Returns:
-            fused: (batch_size, seq_len, model_dim)
-        """
-        _, _, num_features = x.shape
-        assert num_features == self.num_features, f"num_features must be {self.num_features}"
-
-        # embeddings: (batch_size, seq_len, total_embedding_dim)
-        x = torch.concat([embedding(x[:, :, i]) for i, embedding in enumerate(self.embeddings)], dim=2)
-        # fused: (batch_size, seq_len, model_dim)
-        x = self.encoder(x)
-        return x
-
-    def decode(self, fused: torch.Tensor) -> List[torch.Tensor]:
-        """Args:
-            fused: (batch_size, seq_len, model_dim)
-        Returns:
-            logits: List[torch.Tensor] of length num_features,
-            each of shape (batch_size, seq_len, vocab_size of the feature)
-        """
-        # embeddings: (batch_size, seq_len, total_field_size)
-        embeddings = self.decoder(fused)
-        return torch.split(embeddings, self.field_sizes, dim=2)
-
-
-class NgramClassificationHead(nn.Module):
-    """Extra classification head placed after transformer encoder, used for n-gram prediction."""
-
-    def __init__(self, model_dim: int, ngram_size: int) -> None:
-        super().__init__()
-        self.classifier = nn.Linear(model_dim, ngram_size)
-
-    def forward(self, outputs: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Args:
-            outputs: (batch_size, seq_len, model_dim), transformer encoder outputs
-        Returns:
-            logits: (batch_size, seq_len, vocab_size)
-        """
-        return self.classifier(outputs)
-
-
-class SpanPositionalEncoding(nn.Module):
-    """Learnable positional encoding added on [MASK] and [SEP] tokens for advanced span prediction."""
-
-    def __init__(self, model_dim: int, max_length: int = 128) -> None:
-        super().__init__()
-        self.model_dim = model_dim
-        self.max_length = max_length
-
-        self.positional_encoding = nn.Embedding(max_length, model_dim, padding_idx=span_indices_padding_index)
-
-    def forward(self, span_indices: torch.Tensor) -> torch.Tensor:
-        """Args:
-            span_indices: (batch_size, seq_len)
-        Returns:
-            span_encoding: (batch_size, seq_len, model_dim)
-        """
-        return self.positional_encoding(span_indices)
-
+DataBatchDict = Dict[str, DataBatch]
 
 class MelodyModel(pl.LightningModule):
     """Base model for core step logic."""
@@ -129,8 +42,12 @@ class MelodyModel(pl.LightningModule):
 
         self.num_features = len(self.tokenizer.field_names)
 
+        self.embedding_dim = embedding_dim
         self.model_dim = model_dim
+        self.feedforward_dim = feedforward_dim
+        self.num_layers = num_layers
         self.num_heads = num_heads
+        self.dropout = dropout
 
         self.fuser = CompoundTokenFuser(self.tokenizer, embedding_dim, model_dim)
         self.transformer_encoder = nn.TransformerEncoder(
@@ -149,32 +66,32 @@ class MelodyModel(pl.LightningModule):
         if use_span_positional_encoding:
             self.span_positional_encoding = SpanPositionalEncoding(model_dim)
 
-    def forward(
-        self,
-        x: torch.Tensor,
-        padding_mask: Optional[torch.Tensor] = None,
-        attn_mask: Optional[torch.Tensor] = None,
-        span_indices: Optional[torch.Tensor] = None,
-        return_outputs: bool = False,
-    ) -> List[torch.Tensor]:
+    def forward(self, batch: DataBatch, return_outputs: bool = False) -> List[torch.Tensor]:
         """Args:
-            x: (batch_size, seq_len, num_features)
-            padding_mask: (batch_size, seq_len), optional
-            attn_mask: (batch_size, seq_len, seq_len), optional
-            span_indices: (batch_size, seq_len), optional, providing positional information for each span
+            batch: DatasetBatch
             return_outputs: bool, whether to return transformer encoder outputs
         Returns:
             decoded: list of num_features * (batch_size, seq_len, vocab_size of the feature)
             outputs: (batch_size, seq_len, model_dim), transformer encoder outputs
         """
-        x = self.fuser(x)
-        if self.use_span_positional_encoding and span_indices is not None:
-            x = x + self.span_positional_encoding(span_indices)
-        outputs = self.transformer_encoder(x, src_key_padding_mask=padding_mask, mask=attn_mask)
-        decoded = self.fuser.decode(outputs)
+        batch_size, seq_len, _ = batch.input_ids.shape
+
+        attention_mask = batch.attention_mask
+        if attention_mask is not None and len(attention_mask.shape) == 3:
+            # attention_mask: (batch_size * num_heads, seq_len, seq_len)
+            attention_mask = attention_mask.expand(self.num_heads, -1, -1, -1).reshape(
+                self.num_heads * batch_size, seq_len, seq_len
+            )
+
+        x = self.fuser(batch.input_ids)
+        if self.use_span_positional_encoding and batch.span_indices is not None:
+            x += self.span_positional_encoding(batch.span_indices)
+        x = self.transformer_encoder(x, src_key_padding_mask=batch.padding_mask, mask=attention_mask)
+        decoded = self.fuser.decode(x)
         if return_outputs:
-            return decoded, outputs
-        return decoded
+            return decoded, x
+        else:
+            return decoded
 
     def _get_loss(
         self, logits: List[torch.Tensor], label_ids: torch.Tensor, return_parts: bool = False
@@ -190,85 +107,6 @@ class MelodyModel(pl.LightningModule):
         if return_parts:
             return loss, losses
         return loss
-
-    def _get_logits(self, batch: DataBatch, return_outputs: bool = False) -> List[torch.Tensor]:
-        """Args:
-            batch: DatasetBatch
-            return_outputs: bool, whether to return transformer encoder outputs
-        Returns:
-            decoded: list of num_features * (batch_size, seq_len, vocab_size of the feature)
-            outputs: (batch_size, seq_len, model_dim), transformer encoder outputs
-        """
-        batch_size, seq_len, _ = batch.input_ids.shape
-        attention_mask = batch.attention_mask
-        if attention_mask is not None and len(attention_mask.shape) == 3:
-            # attention_mask: (batch_size * num_heads, seq_len, seq_len)
-            attention_mask = attention_mask.expand(self.num_heads, -1, -1, -1).reshape(
-                self.num_heads * batch_size, seq_len, seq_len
-            )
-        return self(
-            batch.input_ids,
-            batch.padding_mask,
-            attention_mask,
-            span_indices=batch.span_indices,
-            return_outputs=return_outputs,
-        )
-
-
-class TrainingTask:
-    is_main_task: bool = False
-
-    def __init__(self, name: str):
-        self.name = name
-
-    def register_extra_modules(self, model: MelodyModel) -> None:
-        pass
-
-    def __call__(self, model: MelodyModel, batch: DataBatch, **kwargs) -> torch.Tensor:
-        raise NotImplementedError
-
-
-class GeneralTask(TrainingTask):
-    def __init__(self, name: str = "general"):
-        super().__init__(name)
-        self.is_main_task = True
-
-    def __call__(self, model: MelodyModel, batch: DataBatch, **kwargs) -> torch.Tensor:
-        logits, outputs = model._get_logits(batch, return_outputs=True)
-        return model._get_loss(logits, batch.label_ids), outputs
-
-
-class NgramClassificationTask(TrainingTask):
-    def __init__(self, ngram_type: str, name: str = "ngram_classification"):
-        super().__init__(name)
-        assert ngram_type in ("pitch", "rhythm")
-
-    def register_extra_modules(self, model: MelodyModel) -> None:
-        lexicon_path = os.path.join(model.dataset_dir, "ngram_data", "lexicon.pkl")
-        pitch_size, rhythm_size = get_lexicon_size(lexicon_path)
-        ngram_size = pitch_size if self.ngram_type == "pitch" else rhythm_size
-        model.ngram_head = NgramClassificationHead(model.model_dim, ngram_size)
-
-    def __call__(
-        self, model: MelodyModel, batch: DataBatch, model_outputs: Optional[torch.Tensor] = None, **kwargs
-    ) -> torch.Tensor:
-        batch_size, seq_len, _ = model_outputs.shape
-        assert batch.ngram_type == self.ngram_type, "ngram types of batch and task must be the same"
-        assert batch.ngram_ids.shape == (batch_size, seq_len), "label_ids must be of shape (batch_size, seq_len)"
-
-        logits = model.ngram_head(model_outputs)
-        loss = F.cross_entropy(
-            logits.transpose(1, 2), batch.ngram_ids, ignore_index=ngram_ids_ignore_index
-        )
-        return loss
-
-
-class SpanRewritingTask(TrainingTask):
-    def __init__(self, name: str = "span_rewriting"):
-        super().__init__(name)
-
-    def __call__(self, model: MelodyModel, batch: DataBatch, **kwargs) -> torch.Tensor:
-        pass
 
 
 class MelodyPretrainModel(MelodyModel):
@@ -291,8 +129,6 @@ class MelodyPretrainModel(MelodyModel):
         weight_decay: float,
         warmup_percent: float,
         # Training configuration
-        tasks: List[TrainingTask],
-        task_weights: Optional[List[float]] = None,
         use_span_positional_encoding: bool = False,
         **kwargs,
     ) -> None:
@@ -312,12 +148,7 @@ class MelodyPretrainModel(MelodyModel):
         self.weight_decay = weight_decay
         self.warmup_percent = warmup_percent
 
-        self.tasks = tasks
-        self.task_weights = task_weights
-        if self.task_weights is None:
-            self.task_weights = [1.0 / len(self.tasks)] * len(self.tasks)
-        for task in self.tasks:
-            task.register_extra_modules(self)
+        self.tasks: Dict[str, TrainingTask] = {}
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr, betas=self.betas, weight_decay=self.weight_decay)
@@ -331,44 +162,31 @@ class MelodyPretrainModel(MelodyModel):
         scheduler = {"scheduler": lr_scheduler, "interval": "step"}
         return [optimizer], [scheduler]
 
-    def _get_batch_size(self, batch: GeneralDataBatch) -> int:
-        if isinstance(batch, DataBatch):
-            return batch.input_ids.shape[0]
-        # get the first batch in the dict
-        batch = next(iter(batch.values()))
-        return batch.input_ids.shape[0]
+    def register_task(self, task: TrainingTask):
+        self.tasks[task.task_name] = task
+        task.register_extra_modules(self)
 
-    def _shared_step(self, batch: GeneralDataBatch) -> Tuple[torch.Tensor, List[torch.Tensor]]:
-        if isinstance(batch, DataBatch):
-            assert len(self.tasks) == 1, "Only one task is allowed for DataBatch"
-            return self.tasks[0](self, batch)
+    def _get_batch_size(self, batch: DataBatchDict) -> int:
+        return next(iter(batch.values())).input_ids.shape[0]
 
-        assert self.tasks[0].is_main_task, "The main task must be the first one in the list of tasks"
-        assert len(batch) == len(self.tasks), "The number of tasks must be the same as the number of batches"
-
-        losses = []
-        for i, task in enumerate(self.tasks):
-            batch_ = batch[task.name]
-            if task.is_main_task:
-                # Get the model outputs from the main task for the other tasks
-                loss, model_outputs = task(self, batch_)
-            else:
-                loss = task(self, batch_, model_outputs=model_outputs)
-            loss *= self.task_weights[i]
-            losses.append(loss)
-        loss = torch.stack(losses).sum()
+    def _shared_step(self, batch: DataBatchDict) -> torch.Tensor:
+        losses = {}
+        for task_name, task in self.tasks.items():
+            losses[task_name] = task(self, batch[task_name])
+        weighted_losses = [loss * self.tasks[task_name].weight for task_name, loss in losses.items()]
+        loss = torch.stack(weighted_losses).sum()
         return loss, losses
 
-    def training_step(self, batch: GeneralDataBatch, batch_idx: int) -> torch.Tensor:
+    def training_step(self, batch: DataBatchDict, batch_idx: int) -> Tuple[torch.Tensor, Dict[str, any]]:
         batch_size = self._get_batch_size(batch)
         loss, losses = self._shared_step(batch)
-        self.log("train_loss", loss, sync_dist=True, batch_size=batch_size)
         if len(self.tasks) > 1:
-            for task, task_loss in zip(self.tasks, losses):
-                self.log(f"train_loss:{task.name}", task_loss, sync_dist=True, batch_size=batch_size)
+            for task_name in self.tasks:
+                self.log(f"train_loss:{task_name}", losses[task_name], sync_dist=True, batch_size=batch_size)
+        self.log("train_loss", loss, sync_dist=True, batch_size=batch_size)
         return loss
 
-    def validation_step(self, batch: GeneralDataBatch, batch_idx: int) -> torch.Tensor:
+    def validation_step(self, batch: DataBatchDict, batch_idx: int) -> Tuple[torch.Tensor, Dict[str, any]]:
         batch_size = self._get_batch_size(batch)
         loss, _ = self._shared_step(batch)
         self.log("val_loss", loss, sync_dist=True, batch_size=batch_size)
@@ -618,18 +436,6 @@ class MelodyInfillingModel(MelodyModel):
             dim=1,
         )
         return input_ids
-
-
-def top_k_sample(logits: torch.Tensor, k: int, t: float = 1.0) -> torch.Tensor:
-    """Sample from the top k logits with temperature t"""
-    assert k > 0, "k must be greater than 0"
-    assert t > 0, "t must be greater than 0"
-    logits = logits / t
-    top_k_logits, top_k_indices = torch.topk(logits, k)
-    top_k_probs = F.softmax(top_k_logits, dim=-1)
-    sampled_index = torch.multinomial(top_k_probs, 1)
-    sampled_token = top_k_indices.gather(0, sampled_index)
-    return sampled_token
 
 
 class CustomWriter(BasePredictionWriter):
