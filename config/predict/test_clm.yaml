@@ -1,5 +1,4 @@
 # lightning.pytorch==1.8.3.post1
-seed_everything: 42
 trainer:
   devices: 1
 model:
@@ -9,7 +8,11 @@ model:
     max_seq_len: 512
     perplexity_stride: 128
 data:
-  batch_size: 32
   dataset_dir: experiment/dataset/wikifonia
-  data_collator:
-    class_path: DataCollatorForCausalLanguageModeling
+  batch_size: 32
+  pitch_augumentation: false
+task:
+  class_path: LanguageModelingTask
+  init_args:
+    seq_len: 512
+    random_crop: false

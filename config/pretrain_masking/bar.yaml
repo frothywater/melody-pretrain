@@ -1,17 +1,11 @@
 # lightning.pytorch==1.8.3.post1
 model:
   dataset_dir: experiment/dataset/pretrain_base
-  tasks:
-    - GeneralTask
 data:
   dataset_dir: experiment/dataset/pretrain_base
   load_bar_data: true
-  data_collator:
-    class_path: DataCollatorForPrefixMaskedLanguageModeling
-    init_args:
-      seq_len: 512
-      random_crop: true
-      masking:
-        class_path: RandomBarMasking
-        init_args:
-          corruption_rate: 0.7
+task:
+  class_path: InfillingTask
+  init_args:
+    kind: bar
+    corruption_rate: 0.5

@@ -2,8 +2,6 @@
 model:
   lr: 5e-5
   dataset_dir: experiment/dataset/wikifonia
-  tasks:
-    - GeneralTask
 trainer:
   max_steps: 1000
   accumulate_grad_batches: 1
@@ -11,13 +9,7 @@ data:
   batch_size: 32
   dataset_dir: experiment/dataset/wikifonia
   load_bar_data: true
-  data_collator:
-    class_path: DataCollatorForPrefixMaskedLanguageModeling
-    init_args:
-      masking:
-        class_path: FixedBarMasking
-        init_args:
-          num_past_bars: 6
-          num_middle_bars: 4
-          num_future_bars: 6
-          random_crop: true
+task:
+  class_path: InfillingTask
+  init_args:
+    kind: fixed_bar

@@ -2,16 +2,10 @@
 model:
   lr: 5e-5
   dataset_dir: experiment/dataset/wikifonia
-  tasks:
-    - GeneralTask
 trainer:
   max_steps: 1000
   accumulate_grad_batches: 1
 data:
   batch_size: 32
   dataset_dir: experiment/dataset/wikifonia
-  data_collator:
-    class_path: DataCollatorForCausalLanguageModeling
-    init_args:
-      seq_len: 512
-      random_crop: true
+task: LanguageModelingTask

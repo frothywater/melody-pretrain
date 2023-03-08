@@ -19,8 +19,9 @@ model:
 data:
   dataset_dir: experiment/dataset/wikifonia
   batch_size: 1
-  num_workers: 4
-  data_collator:
-    class_path: DataCollatorForPaddingOnly
-    init_args:
-      seq_len: 512
+  pitch_augumentation: false
+task:
+  class_path: LanguageModelingTask
+  init_args:
+    seq_len: 512
+    padding_only: true
