@@ -1,51 +1,29 @@
 # lightning.pytorch==1.8.3.post1
 model:
   dataset_dir: experiment/dataset/pretrain_base
-  task_weights: [0.25, 0.25, 0.5]
   tasks:
-    - class_path: GeneralTask
-      init_args:
-        name: pitch_ngram
-    - class_path: GeneralTask
-      init_args:
-        name: rhythm_ngram
-    - class_path: GeneralTask
-      init_args:
-        name: single_span
+    - GeneralTask
 data:
   dataset_dir: experiment/dataset/pretrain_base
   load_ngram_data: true
   data_collator:
-    class_path: DataCollatorForMultipleTasks
+    class_path: DataCollatorForPrefixMaskedLanguageModeling
     init_args:
-      names:
-        - pitch_ngram
-        - rhythm_ngram
-        - single_span
-      collators:
-        - class_path: DataCollatorForPrefixMaskedLanguageModeling
-          init_args:
-            seq_len: 512
-            random_crop: true
-            masking:
-              class_path: RandomNgramMasking
+      seq_len: 512
+      random_crop: true
+      masking:
+        class_path: MultiTargetInfillingMasking
+        init_args:
+          probabilities: [0.25, 0.25, 0.5]
+          maskings:
+            - class_path: RandomNgramMasking
               init_args:
-                corruption_rate: 0.25
+                corruption_rate: 0.7
                 extra_data_field_name: pitch_ngrams
-        - class_path: DataCollatorForPrefixMaskedLanguageModeling
-          init_args:
-            seq_len: 512
-            random_crop: true
-            masking:
-              class_path: RandomNgramMasking
+            - class_path: RandomNgramMasking
               init_args:
-                corruption_rate: 0.25
+                corruption_rate: 0.7
                 extra_data_field_name: rhythm_ngrams
-        - class_path: DataCollatorForPrefixMaskedLanguageModeling
-          init_args:
-            seq_len: 512
-            random_crop: true
-            masking:
-              class_path: SingleSpanMasking
+            - class_path: SingleSpanMasking
               init_args:
-                corruption_rate: 0.5
+                corruption_rate: 0.7
