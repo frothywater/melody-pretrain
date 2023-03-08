@@ -1,29 +1,13 @@
 # lightning.pytorch==1.8.3.post1
 model:
   dataset_dir: experiment/dataset/pretrain_base
-  tasks:
-    - GeneralTask
 data:
   dataset_dir: experiment/dataset/pretrain_base
   load_ngram_data: true
-  data_collator:
-    class_path: DataCollatorForPrefixMaskedLanguageModeling
-    init_args:
-      seq_len: 512
-      random_crop: true
-      masking:
-        class_path: MultiTargetInfillingMasking
-        init_args:
-          probabilities: [0.25, 0.25, 0.5]
-          maskings:
-            - class_path: RandomNgramMasking
-              init_args:
-                corruption_rate: 0.7
-                extra_data_field_name: pitch_ngrams
-            - class_path: RandomNgramMasking
-              init_args:
-                corruption_rate: 0.7
-                extra_data_field_name: rhythm_ngrams
-            - class_path: SingleSpanMasking
-              init_args:
-                corruption_rate: 0.7
+task:
+  class_path: InfillingTask
+  init_args:
+    kind:
+      - ngram
+      - single
+    corruption_rate: 0.5

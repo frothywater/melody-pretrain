@@ -3,9 +3,4 @@ model:
   dataset_dir: experiment/dataset/pretrain_base
 data:
   dataset_dir: experiment/dataset/pretrain_base
-  load_ngram_data: true
-task:
-  class_path: InfillingTask
-  init_args:
-    kind: ngram
-    corruption_rate: 0.5
+task: LanguageModelingTask

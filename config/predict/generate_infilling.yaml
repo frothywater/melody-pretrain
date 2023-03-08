@@ -18,15 +18,10 @@ model:
 data:
   dataset_dir: experiment/dataset/wikifonia
   batch_size: 1
-  num_workers: 4
-  data_collator:
-    class_path: DataCollatorForInfilling
-    init_args:
-      masking:
-        class_path: FixedBarMasking
-        init_args:
-          num_past_bars: 6
-          num_middle_bars: 4
-          num_future_bars: 6
-          random_crop: false
   load_bar_data: true
+  pitch_augumentation: false
+task:
+  class_path: InfillingTask
+  init_args:
+    kind: fixed_bar
+    random_crop: false
