@@ -1,6 +1,0 @@
-# lightning.pytorch==1.8.3.post1
-model:
-  dataset_dir: experiment/dataset/pretrain_base
-data:
-  dataset_dir: experiment/dataset/pretrain_base
-task: LanguageModelingTask
