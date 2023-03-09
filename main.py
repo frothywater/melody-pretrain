@@ -20,6 +20,8 @@ class CustomLightningCLI(LightningCLI):
             raise ValueError("Task is not specified.")
         if not isinstance(tasks, list):
             tasks = [tasks]
+        task_names = [task.task_name for task in tasks]
+        assert len(task_names) == len(set(task_names)), "Task names must be unique."
         for task in tasks:
             task_name = task.task_name
             data_collator = task.get_data_collator()
