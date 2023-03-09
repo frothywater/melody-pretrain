@@ -1,6 +1,6 @@
 import os
 from glob import glob
-from typing import Dict, List, NamedTuple, Optional, Tuple, Union
+from typing import Dict, List, NamedTuple, Optional, Tuple
 
 import lightning as pl
 import numpy as np
@@ -1122,23 +1122,31 @@ class MelodyPretrainDataModule(pl.LightningDataModule):
         dataset.setup_tokenizer(self.tokenizer)
         return dataset
 
-    def _make_data_loader(self, split_name: str):
+    def _make_data_loader(self, split_name: str, collator: DataCollator):
+        # batch_size=1 for prediction currently
+        return DataLoader(
+            self.datasets[split_name],
+            batch_size=self.batch_size if split_name != "predict" else 1,
+            shuffle=split_name == "train",
+            drop_last=split_name == "train",
+            collate_fn=collator,
+            num_workers=self.num_workers,
+            pin_memory=True,
+        )
+
+    def _make_data_loaders(self, split_name: str):
         if split_name not in self.datasets:
             return None
+        if split_name != "train" and len(self.data_collators) > 1:
+            raise ValueError("Only one task is supported for evaluation.")
 
-        def _make_one(task_name: str):
-            # batch_size=1 for prediction currently
-            return DataLoader(
-                self.datasets[split_name],
-                batch_size=self.batch_size if split_name != "predict" else 1,
-                shuffle=split_name == "train",
-                drop_last=split_name == "train",
-                collate_fn=self.data_collators[task_name],
-                num_workers=self.num_workers,
-                pin_memory=True,
-            )
-
-        return {task_name: _make_one(task_name) for task_name in self.data_collators}
+        if len(self.data_collators) == 1:
+            return self._make_data_loader(split_name, next(iter(self.data_collators.values())))
+        else:
+            return {
+                task_name: self._make_data_loader(split_name, collator)
+                for task_name, collator in self.data_collators.items()
+            }
 
     def setup(self, stage: str):
         self.train_dir = os.path.join(self.dataset_dir, "train")
@@ -1155,13 +1163,13 @@ class MelodyPretrainDataModule(pl.LightningDataModule):
         self.data_collators[task_name].setup_tokenizer(self.tokenizer)
 
     def train_dataloader(self):
-        return self._make_data_loader("train")
+        return self._make_data_loaders("train")
 
     def val_dataloader(self):
-        return self._make_data_loader("valid")
+        return self._make_data_loaders("valid")
 
     def test_dataloader(self):
-        return self._make_data_loader("test")
+        return self._make_data_loaders("test")
 
     def predict_dataloader(self):
-        return self._make_data_loader("predict")
+        return self._make_data_loaders("predict")
