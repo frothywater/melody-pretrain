@@ -199,7 +199,7 @@ class MIDITokenizer:
     def convert_id_to_token(self, token: np.ndarray) -> MIDICompoundToken:
         return self.convert_ids_to_tokens(np.expand_dims(token, axis=0))[0]
 
-    def encode(self, midi: MidiFile, return_bar_spans: bool = False) -> np.ndarray:
+    def encode(self, midi: MidiFile, return_bar_spans: bool = False, include_empty_bar: bool = False) -> np.ndarray:
         """Encode midi file to token ids.
         Args:
             midi: midi file to encode.
@@ -209,7 +209,7 @@ class MIDITokenizer:
         tokens = self.tokenize(midi)
         token_ids = self.convert_tokens_to_ids(tokens)
         if return_bar_spans:
-            bar_spans = self.get_bar_spans(token_ids)
+            bar_spans = self.get_bar_spans(token_ids, include_empty_bar=include_empty_bar)
             return token_ids, bar_spans
         return token_ids
 
@@ -223,21 +223,34 @@ class MIDITokenizer:
         tokens = self.convert_ids_to_tokens(token_ids)
         return self.detokenize(tokens)
 
-    def get_bar_spans(self, token_ids: np.ndarray) -> np.ndarray:
+    def get_bar_spans(self, token_ids: np.ndarray, include_empty_bar: bool) -> np.ndarray:
         """Get bar spans for each token.
         Args:
             token_ids: (num_tokens, num_features)
         Returns:
             bar_spans: (num_bars, 2) array, each row is [start, end) of bar span.
         """
-        num_tokens, _ = token_ids.shape
         bar_field_index = self.field_indices["bar"]
-        bar_fields = token_ids[:, bar_field_index]
-        bar_start_mask = np.concatenate([[True], bar_fields[:-1] != bar_fields[1:]])
-        bar_start_indices = np.extract(bar_start_mask, np.arange(num_tokens, dtype=np.int16))
-        bar_end_indices = np.concatenate([bar_start_indices[1:], [num_tokens]], dtype=np.int16)
-        bar_spans = np.stack([bar_start_indices, bar_end_indices], axis=1)
-        return bar_spans
+        if not include_empty_bar:
+            num_tokens, _ = token_ids.shape
+            bar_fields = token_ids[:, bar_field_index]
+            bar_start_mask = np.concatenate([[True], bar_fields[:-1] != bar_fields[1:]])
+            bar_start_indices = np.extract(bar_start_mask, np.arange(num_tokens, dtype=np.int16))
+            bar_end_indices = np.concatenate([bar_start_indices[1:], [num_tokens]], dtype=np.int16)
+            bar_spans = np.stack([bar_start_indices, bar_end_indices], axis=1)
+            return bar_spans
+        else:
+            bar_spans = []
+            current_bar, last_index = 0, 0
+            for index, token in enumerate(token_ids):
+                bar = token[bar_field_index]
+                if bar != current_bar:
+                    for _ in range(current_bar, bar):
+                        bar_spans.append([last_index, index])
+                    current_bar = bar
+                    last_index = index
+            bar_spans.append([last_index, len(token_ids)])
+            return np.array(bar_spans, dtype=np.int16)
 
     def pitch_shift_augument_(self, token_ids: np.ndarray, shift_range: int = 6) -> None:
         """Pitch shift augumentation. This method will modify the token_ids in place.
@@ -279,11 +292,13 @@ if __name__ == "__main__":
     print("field_sizes:", tokenizer.field_sizes)
     print("vocab_sizes:", tokenizer.vocab_sizes)
     print("encoder:", tokenizer.encoder)
-    midi = MidiFile("data/test.mid")
-    tokens = tokenizer.encode(midi)
+    midi = MidiFile("test.mid")
+    tokens, bar_spans = tokenizer.encode(midi, return_bar_spans=True, include_empty_bar=True)
     print(tokens)
     new_tokens = tokenizer.encode(tokenizer.decode(tokens))
     if np.all(tokens == new_tokens):
         print("Encode and decode are consistent.")
     else:
         print("Encode and decode are inconsistent!")
+
+    print("bar_spans:", bar_spans)
