@@ -287,9 +287,10 @@ class RandomSpanMasking(InfillingMasking):
         """
         num_noise_tokens = int(round(length * self.corruption_rate))
         num_noise_tokens = min(max(num_noise_tokens, 1), length - 1)
-        num_noise_spans = int(round(num_noise_tokens / self.mean_span_length))
-        num_noise_spans = max(num_noise_spans, 1)
         num_nonnoise_tokens = length - num_noise_tokens
+        num_noise_spans = int(round(num_noise_tokens / self.mean_span_length))
+        # make sure that the number of span pairs is at least equal to the number of noise/non-noise tokens
+        num_noise_spans = min(max(num_noise_spans, 1), min(num_noise_tokens, num_nonnoise_tokens))
 
         # pick the lengths of the noise spans and the non-noise spans
         def _random_segmentation(num_items: int, num_segments: int):
@@ -813,7 +814,7 @@ class DataCollatorForPrefixMaskedLanguageModeling(DataCollator):
         permutated_infilling: bool = False,
         span_independent_infilling: bool = False,
         ngram_classification: bool = False,
-        ngram_field_specific_masking: bool = True,
+        ngram_field_specific_masking: bool = False,
     ):
         super().__init__(seq_len, random_crop)
         self.masking = masking
