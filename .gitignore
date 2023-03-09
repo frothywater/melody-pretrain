@@ -141,6 +141,7 @@ Thumbs.db
 # custom
 .history/
 data/
+experiment
 experiment/
 backup/
 .nfs*
