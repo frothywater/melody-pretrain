@@ -1,4 +1,4 @@
-from typing import List, Tuple, Union
+from typing import Dict, List
 
 import torch
 import torch.nn as nn
@@ -10,7 +10,7 @@ from .tokenizer import MIDITokenizer
 class CompoundTokenFuser(nn.Module):
     """Fuses multiple token embeddings into a single embedding."""
 
-    def __init__(self, tokenizer: MIDITokenizer, embedding_dim: Union[int, Tuple[int, ...]], model_dim: int) -> None:
+    def __init__(self, tokenizer: MIDITokenizer, embedding_dim: Dict[str, int], model_dim: int) -> None:
         super().__init__()
         self.tokenizer = tokenizer
         self.num_features = len(tokenizer.field_names)
@@ -18,18 +18,15 @@ class CompoundTokenFuser(nn.Module):
         self.total_field_size = sum(self.field_sizes)
 
         self.model_dim = model_dim
-        if isinstance(embedding_dim, int):
-            self.embedding_dims = [embedding_dim for _ in range(self.num_features)]
-        else:
-            assert len(embedding_dim) == self.num_features, "embedding_dim must be int or list of length num_features"
-            self.embedding_dims = embedding_dim
-        self.total_embedding_dim = sum(self.embedding_dims)
+        self.total_embedding_dim = sum(embedding_dim.values())
 
         self.embeddings = nn.ModuleList(
             [
-                nn.Embedding(num_embeddings=field_size, embedding_dim=embedding_dim_, padding_idx=pad_token_id)
-                for field_size, embedding_dim_, pad_token_id in zip(
-                    self.field_sizes, self.embedding_dims, tokenizer.pad_token_ids
+                nn.Embedding(
+                    num_embeddings=field_size, embedding_dim=embedding_dim[field_name], padding_idx=pad_token_id
+                )
+                for field_name, field_size, pad_token_id in zip(
+                    tokenizer.field_names, tokenizer.field_sizes, tokenizer.pad_token_ids
                 )
             ]
         )

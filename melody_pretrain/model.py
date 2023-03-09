@@ -24,7 +24,7 @@ class MelodyModel(pl.LightningModule):
         # Instantiate the tokenizer using config file in the dataset directory
         dataset_dir: str,
         # Model hyperparameters
-        embedding_dim: Union[int, Tuple[int, ...]],  # embedding_dim: (bar, position, duration, pitch)
+        embedding_dim: Dict[str, int],
         model_dim: int,
         feedforward_dim: int,
         num_layers: int,
@@ -117,7 +117,7 @@ class MelodyPretrainModel(MelodyModel):
         # Instantiate the tokenizer using config file in the dataset directory
         dataset_dir: str,
         # Model hyperparameters
-        embedding_dim: Union[int, Tuple[int, ...]],  # embedding_dim: (bar, position, duration, pitch)
+        embedding_dim: Dict[str, int],
         model_dim: int,
         feedforward_dim: int,
         num_layers: int,
@@ -199,7 +199,7 @@ class MelodyTestingModel(MelodyModel):
         # Instantiate the tokenizer using config file in the dataset directory
         dataset_dir: str,
         # Model hyperparameters
-        embedding_dim: Union[int, Tuple[int, ...]],  # embedding_dim: (bar, position, duration, pitch)
+        embedding_dim: Dict[str, int],
         model_dim: int,
         feedforward_dim: int,
         num_layers: int,
@@ -268,7 +268,7 @@ class MelodyCompletionModel(MelodyModel):
         # Instantiate the tokenizer using config file in the dataset directory
         dataset_dir: str,
         # Model hyperparameters
-        embedding_dim: Union[int, Tuple[int, ...]],  # embedding_dim: (bar, position, duration, pitch)
+        embedding_dim: Dict[str, int],
         model_dim: int,
         feedforward_dim: int,
         num_layers: int,
@@ -346,7 +346,7 @@ class MelodyInfillingModel(MelodyModel):
         # Instantiate the tokenizer using config file in the dataset directory
         dataset_dir: str,
         # Model hyperparameters
-        embedding_dim: Union[int, Tuple[int, ...]],  # embedding_dim: (bar, position, duration, pitch)
+        embedding_dim: Dict[str, int],
         model_dim: int,
         feedforward_dim: int,
         num_layers: int,

@@ -3,7 +3,7 @@ from math import floor, log2
 from typing import Dict, List, NamedTuple, Tuple, Union
 
 import numpy as np
-from miditoolkit import Instrument, MidiFile, Note
+from miditoolkit import Instrument, MidiFile, Note, TempoChange
 
 Field = int
 SpecialTokenField = str
@@ -18,6 +18,7 @@ class MIDICompoundToken(NamedTuple):
     position: AnyField
     duration: AnyField
     pitch: AnyField
+    tempo: AnyField
 
 
 class MIDITokenizer:
@@ -46,6 +47,9 @@ class MIDITokenizer:
         triplet_duration = set([self.ticks_per_bar // (3 * 2**r) for r in range(triplet_ratio + 1)])
         self.duration_bins = sorted(double_duration | triplet_duration)
 
+        self.tempo_bins = list(range(60, 180 + 1, 10))
+        self.default_tempo = 120
+
         # vocabularies for each field
         self.field_names = MIDICompoundToken._fields
         self.field_indices = {name: index for index, name in enumerate(self.field_names)}
@@ -54,6 +58,7 @@ class MIDITokenizer:
         self.vocabularies["position"] = self.position_bins
         self.vocabularies["duration"] = self.duration_bins
         self.vocabularies["pitch"] = list(self.pitch_range)
+        self.vocabularies["tempo"] = self.tempo_bins
         self.vocab_sizes = [len(self.vocabularies[field_name]) for field_name in self.field_names]
         self.field_sizes = list(self.vocab_sizes)  # will be modified when adding special tokens
 
@@ -107,35 +112,63 @@ class MIDITokenizer:
         self.cls_token_ids = self.convert_token_to_id(self.cls_token)
         self.mask_token_ids = self.convert_token_to_id(self.mask_token)
         self.long_mask_token_ids = self.convert_token_to_id(self.long_mask_token)
-        self.special_token_id_matrix = np.array(
-            [
-                self.bos_token_ids,
-                self.eos_token_ids,
-                self.pad_token_ids,
-                self.sep_token_ids,
-                self.cls_token_ids,
-                self.mask_token_ids,
-                self.long_mask_token_ids,
-            ]
-        ).T  # (num_features, num_tokens)
 
     def tokenize(self, midi: MidiFile) -> List[MIDICompoundToken]:
         """Tokenize a midi file into a list of MIDICompoundToken."""
         assert len(midi.instruments) == 1, "Only support single instrument midi file."
 
+        # sort and deduplicate tempo changes
+        tempo_changes = midi.tempo_changes
+        if len(tempo_changes) == 0:
+            tempo_changes = [TempoChange(tempo=self.default_tempo, time=0)]
+        elif len(tempo_changes) > 1:
+            tempo_changes = sorted(midi.tempo_changes, key=lambda x: x.time)
+            tempo_changes = [
+                tempo_changes[i]
+                for i in range(len(tempo_changes))
+                if i == len(tempo_changes) - 1 or tempo_changes[i].time != tempo_changes[i + 1].time
+            ]
+
+        current_tempo_index = 0
         tokens: List[MIDICompoundToken] = []
         for note in midi.instruments[0].notes:
+            # change current tempo if current note is after the next tempo change
+            if (
+                current_tempo_index < len(tempo_changes) - 1
+                and note.start >= tempo_changes[current_tempo_index + 1].time
+            ):
+                current_tempo_index += 1
+
             bar = (note.start // self.ticks_per_bar) % self.max_bar
             position = self._find_nearest(self.position_bins, note.start % self.ticks_per_bar)
             duration = self._find_nearest(self.duration_bins, note.end - note.start)
-            tokens.append(MIDICompoundToken(bar, position, duration, note.pitch))
+            tempo = self._find_nearest(self.tempo_bins, tempo_changes[current_tempo_index].tempo)
+            tokens.append(MIDICompoundToken(bar, position, duration, note.pitch, tempo))
         return tokens
 
-    def convert_token_to_id(self, token: MIDICompoundToken) -> np.ndarray:
-        return self.convert_tokens_to_ids([token])[0]
-    
-    def convert_id_to_token(self, token: np.ndarray) -> MIDICompoundToken:
-        return self.convert_ids_to_tokens(np.expand_dims(token, axis=0))[0]
+    def detokenize(self, tokens: List[MIDICompoundToken], velocity=100) -> MidiFile:
+        """Detokenize a list of MIDICompoundToken into a midi file."""
+        midi = MidiFile()
+        notes = []
+        current_tempo = self.default_tempo
+        midi.tempo_changes = [TempoChange(tempo=current_tempo, time=0)]
+        for token in tokens:
+            if any([field is None or field in self.special_token_str for field in token]):
+                continue
+            start = token.bar * self.ticks_per_bar + token.position
+            end = token.bar * self.ticks_per_bar + token.position + token.duration
+            note = Note(velocity=velocity, pitch=token.pitch, start=start, end=end)
+            notes.append(note)
+
+            # add tempo change if tempo changes
+            if token.tempo != current_tempo:
+                current_tempo = token.tempo
+                midi.tempo_changes.append(TempoChange(tempo=current_tempo, time=start))
+
+        instrument = Instrument(program=0)
+        instrument.notes.extend(notes)
+        midi.instruments.append(instrument)
+        return midi
 
     def convert_tokens_to_ids(self, tokens: List[MIDICompoundToken]) -> np.ndarray:
         token_ids = np.zeros((len(tokens), len(self.field_names)), dtype=np.int16)
@@ -160,37 +193,11 @@ class MIDITokenizer:
             result.append(MIDICompoundToken(*fields))
         return result
 
-    def detokenize(self, tokens: List[MIDICompoundToken], velocity=100) -> MidiFile:
-        """Detokenize a list of MIDICompoundToken into a midi file."""
-        midi = MidiFile()
-        notes = []
-        for token in tokens:
-            if any([field is None or field in self.special_token_str for field in token]):
-                continue
-            start = token.bar * self.ticks_per_bar + token.position
-            end = token.bar * self.ticks_per_bar + token.position + token.duration
-            note = Note(velocity=velocity, pitch=token.pitch, start=start, end=end)
-            notes.append(note)
-        instrument = Instrument(program=0)
-        instrument.notes.extend(notes)
-        midi.instruments.append(instrument)
-        return midi
+    def convert_token_to_id(self, token: MIDICompoundToken) -> np.ndarray:
+        return self.convert_tokens_to_ids([token])[0]
 
-    def get_bar_spans(self, token_ids: np.ndarray) -> np.ndarray:
-        """Get bar spans for each token.
-        Args:
-            token_ids: (num_tokens, num_features)
-        Returns:
-            bar_spans: (num_bars, 2) array, each row is [start, end) of bar span.
-        """
-        num_tokens, _ = token_ids.shape
-        bar_field_index = self.field_indices["bar"]
-        bar_fields = token_ids[:, bar_field_index]
-        bar_start_mask = np.concatenate([[True], bar_fields[:-1] != bar_fields[1:]])
-        bar_start_indices = np.extract(bar_start_mask, np.arange(num_tokens, dtype=np.int16))
-        bar_end_indices = np.concatenate([bar_start_indices[1:], [num_tokens]], dtype=np.int16)
-        bar_spans = np.stack([bar_start_indices, bar_end_indices], axis=1)
-        return bar_spans
+    def convert_id_to_token(self, token: np.ndarray) -> MIDICompoundToken:
+        return self.convert_ids_to_tokens(np.expand_dims(token, axis=0))[0]
 
     def encode(self, midi: MidiFile, return_bar_spans: bool = False) -> np.ndarray:
         """Encode midi file to token ids.
@@ -215,6 +222,22 @@ class MIDITokenizer:
         """
         tokens = self.convert_ids_to_tokens(token_ids)
         return self.detokenize(tokens)
+
+    def get_bar_spans(self, token_ids: np.ndarray) -> np.ndarray:
+        """Get bar spans for each token.
+        Args:
+            token_ids: (num_tokens, num_features)
+        Returns:
+            bar_spans: (num_bars, 2) array, each row is [start, end) of bar span.
+        """
+        num_tokens, _ = token_ids.shape
+        bar_field_index = self.field_indices["bar"]
+        bar_fields = token_ids[:, bar_field_index]
+        bar_start_mask = np.concatenate([[True], bar_fields[:-1] != bar_fields[1:]])
+        bar_start_indices = np.extract(bar_start_mask, np.arange(num_tokens, dtype=np.int16))
+        bar_end_indices = np.concatenate([bar_start_indices[1:], [num_tokens]], dtype=np.int16)
+        bar_spans = np.stack([bar_start_indices, bar_end_indices], axis=1)
+        return bar_spans
 
     def pitch_shift_augument_(self, token_ids: np.ndarray, shift_range: int = 6) -> None:
         """Pitch shift augumentation. This method will modify the token_ids in place.
@@ -256,7 +279,11 @@ if __name__ == "__main__":
     print("field_sizes:", tokenizer.field_sizes)
     print("vocab_sizes:", tokenizer.vocab_sizes)
     print("encoder:", tokenizer.encoder)
-    tokens = tokenizer.encode("data/test.mid")
+    midi = MidiFile("data/test.mid")
+    tokens = tokenizer.encode(midi)
     print(tokens)
-    midi = tokenizer.decode(tokens)
-    midi.dump("data/test_back.mid")
+    new_tokens = tokenizer.encode(tokenizer.decode(tokens))
+    if np.all(tokens == new_tokens):
+        print("Encode and decode are consistent.")
+    else:
+        print("Encode and decode are inconsistent!")

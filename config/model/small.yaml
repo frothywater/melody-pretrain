@@ -2,7 +2,12 @@
 model:
   class_path: melody_pretrain.model.MelodyPretrainModel
   init_args:
-    embedding_dim: [32, 256, 256, 512]
+    embedding_dim:
+      bar: 32
+      position: 256
+      duration: 256
+      pitch: 512
+      tempo: 32
     model_dim: 384
     feedforward_dim: 1536
     num_layers: 6
