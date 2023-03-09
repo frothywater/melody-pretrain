@@ -43,15 +43,23 @@ class TrainingTask:
 
 
 class LanguageModelingTask(TrainingTask):
-    def __init__(self, task_name: str = "clm", weight: float = 1.0, seq_len: int = 512, padding_only: bool = False):
+    def __init__(
+        self,
+        task_name: str = "clm",
+        weight: float = 1.0,
+        seq_len: int = 512,
+        random_crop: bool = True,
+        padding_only: bool = False,
+    ):
         super().__init__(task_name, weight)
         self.seq_len = seq_len
+        self.random_crop = random_crop
         self.padding_only = padding_only
 
     def get_data_collator(self) -> DataCollator:
         if self.padding_only:
             return DataCollatorForPaddingOnly(seq_len=self.seq_len)
-        return DataCollatorForCausalLanguageModeling(seq_len=self.seq_len, random_crop=True)
+        return DataCollatorForCausalLanguageModeling(seq_len=self.seq_len, random_crop=self.random_crop)
 
     def __call__(self, model: "MelodyModel", batch: DataBatch, **kwargs) -> torch.Tensor:
         logits = model(batch)
@@ -72,7 +80,7 @@ class InfillingTask(TrainingTask):
         permutated_infilling: bool = False,
         span_independent_infilling: bool = False,
     ):
-        super().__init__(task_name, weight)
+        super().__init__(f"{kind}_{task_name}", weight)
         self.kinds = kind if isinstance(kind, list) else [kind]
         self.probabilities = probabilities
         self.corruption_rate = corruption_rate

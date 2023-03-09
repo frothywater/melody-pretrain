@@ -11,13 +11,11 @@ class CustomLightningCLI(LightningCLI):
 
     def add_arguments_to_parser(self, parser) -> None:
         parser.add_argument("--load_from_checkpoint", type=Optional[str], default=None)
-        parser.add_argument("--task", type=Union[None, TrainingTask, List[TrainingTask]])
+        parser.add_argument("--task", type=Union[TrainingTask, List[TrainingTask]])
 
-    def before_fit(self) -> None:
-        # Set training tasks
-        tasks = self.parser.instantiate_classes(self.config).fit.task
-        if tasks is None:
-            raise ValueError("Task is not specified.")
+    def setup_tasks(self) -> None:
+        config = self.parser.instantiate_classes(self.config)
+        tasks = getattr(config, self.subcommand).task
         if not isinstance(tasks, list):
             tasks = [tasks]
         task_names = [task.task_name for task in tasks]
@@ -26,7 +24,11 @@ class CustomLightningCLI(LightningCLI):
             task_name = task.task_name
             data_collator = task.get_data_collator()
             self.datamodule.register_task(task_name, data_collator)
-            self.model.register_task(task)
+            if self.subcommand == "fit":
+                self.model.register_task(task)
+
+    def before_fit(self) -> None:
+        self.setup_tasks()
 
         # Load from checkpoint
         load_from_checkpoint_path = self.config.fit.load_from_checkpoint
@@ -35,6 +37,11 @@ class CustomLightningCLI(LightningCLI):
             self.model.load_state_dict(checkpoint["state_dict"], strict=False)
             print("Loaded model from checkpoint:", load_from_checkpoint_path)
 
+    def before_test(self) -> None:
+        self.setup_tasks()
+    
+    def before_predict(self) -> None:
+        self.setup_tasks()
 
 def cli_main():
     torch.set_float32_matmul_precision("high")

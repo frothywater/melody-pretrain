@@ -167,9 +167,14 @@ class MelodyPretrainModel(MelodyModel):
         task.register_extra_modules(self)
 
     def _get_batch_size(self, batch: DataBatchDict) -> int:
+        if len(self.tasks) == 1:
+            return batch.input_ids.shape[0]
         return next(iter(batch.values())).input_ids.shape[0]
 
     def _shared_step(self, batch: DataBatchDict) -> torch.Tensor:
+        if len(self.tasks) == 1:
+            task = next(iter(self.tasks.values()))
+            return task(self, batch), {}
         losses = {}
         for task_name, task in self.tasks.items():
             losses[task_name] = task(self, batch[task_name])
@@ -249,7 +254,7 @@ class MelodyTestingModel(MelodyModel):
                 padding_mask=batch.padding_mask[:, start_index:end_index],
                 attention_mask=batch.attention_mask[start_index:end_index, start_index:end_index],
             )
-            logits = self._get_logits(new_batch)
+            logits = self(new_batch)
             loss = self._get_loss(logits, new_batch.label_ids)
             neg_log_likelihood = loss * target_length
             nlls.append(neg_log_likelihood)
