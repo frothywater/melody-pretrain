@@ -77,11 +77,12 @@ def get_ngram_score_dict(ngram_prob_dict: dict, kind: str, method: str = "tscore
         iid_product = 1
         for k in range(len(ngram) - 1):
             if kind == "pitch":
-                # unit: unordered interval
-                interval = (0, (ngram[k + 1] - ngram[k]) % 12)
+                # Independent unit in pitch ngram: pitch class interval relative to the first note
+                # interval = (0, (ngram[k + 1] - ngram[k]) % 12)
+                interval = (0, (ngram[k + 1] - ngram[0]) % 12)
                 iid_product *= ngram_prob_dict[interval]
             elif kind == "rhythm":
-                # unit: onset & inter-onset-interval (IOI)
+                # Independent unit in rhythm ngram: inter-onset interval (IOI) & onsets relative to the first bar line
                 bar_onset = ngram[k] // ticks_per_bar * ticks_per_bar
                 unit = tuple(onset - bar_onset for onset in ngram[k : k + 2])
                 iid_product *= ngram_prob_dict[unit]
@@ -129,7 +130,7 @@ def extract_pitch_class_ngrams_job(midi_file: str, ngram_range: range):
     ngram_list = []
     for n in ngram_range:
         for i in range(len(pitch_classes) - n + 1):
-            # pitch class
+            # Pitch ngram: pitch class relative to the first note
             ngram = [(pc - pitch_classes[i]) % 12 for pc in pitch_classes[i : i + n]]
             ngram_list.append((tuple(ngram), i))
     return ngram_list
@@ -146,7 +147,7 @@ def extract_onset_ngrams_job(midi_file: str, ngram_range: range):
     ngram_list = []
     for n in ngram_range:
         for i in range(len(onsets) - n + 1):
-            # relative to the first bar line
+            # Rhythm ngram: onsets relative to the first bar line
             start = onsets[i] // ticks_per_bar * ticks_per_bar
             ngram = [(onset - start) for onset in onsets[i : i + n]]
 
@@ -168,7 +169,7 @@ def extract_ngram_freq_dict(midi_file: str, ngram_range: range, kind: str):
 
 
 def extract_ngrams(midi_dir: str, ngram_range: range, kind: str):
-    midi_files = glob(midi_dir + "/**/*.mid")
+    midi_files = glob(midi_dir + "/**/*.mid", recursive=True)
     print(f"extracting {kind} ngrams from {len(midi_files)} midi files...")
     with Pool() as pool:
         futures = [

@@ -10,6 +10,7 @@ if __name__ == "__main__":
     parser.add_argument("--dataset_dir", type=str)
     parser.add_argument("--length", type=int, default=8)
     parser.add_argument("--top_p", type=float, default=0.1)
+    parser.add_argument("--override", action="store_true", default=False)
     args = parser.parse_args()
 
     if args.subcommand == "extract":
@@ -24,7 +25,7 @@ if __name__ == "__main__":
         # check if ngram data exists
         if not os.path.exists(os.path.join(data_dir, "ngram_pitch.pkl")) or not os.path.exists(
             os.path.join(data_dir, "ngram_rhythm.pkl")
-        ):
+        ) or args.override:
             print("ngram data not found, extracting...")
             assert args.midi_dir is not None, "midi_dir is required"
             ngram_range = range(1, args.length + 1)
