@@ -95,21 +95,17 @@ class InfillingTask(TrainingTask):
                 return RandomSpanMasking(corruption_rate=self.corruption_rate, mean_span_length=self.mean_span_length)
             elif kind == "bar":
                 return RandomBarMasking(corruption_rate=self.corruption_rate)
-            elif kind == "ngram":
-                return MultiTargetInfillingMasking(
-                    [
-                        RandomNgramMasking(
-                            corruption_rate=self.corruption_rate,
-                            fallback_mean_span_length=self.mean_span_length,
-                            extra_data_field_name="pitch_ngrams",
-                        ),
-                        RandomNgramMasking(
-                            corruption_rate=self.corruption_rate,
-                            fallback_mean_span_length=self.mean_span_length,
-                            extra_data_field_name="rhythm_ngrams",
-                        ),
-                    ],
-                    probabilities=[0.5, 0.5],
+            elif kind == "pitch_ngram":
+                return RandomNgramMasking(
+                    corruption_rate=self.corruption_rate,
+                    fallback_mean_span_length=self.mean_span_length,
+                    extra_data_field_name="pitch_ngrams",
+                )
+            elif kind == "rhythm_ngram":
+                return RandomNgramMasking(
+                    corruption_rate=self.corruption_rate,
+                    fallback_mean_span_length=self.mean_span_length,
+                    extra_data_field_name="rhythm_ngrams",
                 )
             elif kind == "single":
                 return SingleSpanMasking(corruption_rate=self.corruption_rate)
