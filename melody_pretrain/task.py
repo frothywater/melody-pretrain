@@ -8,23 +8,22 @@ import torch.nn.functional as F
 from .dataset import (
     DataBatch,
     DataCollator,
-    DataCollatorForPaddingOnly,
     DataCollatorForCausalLanguageModeling,
-    DataCollatorForPrefixMaskedLanguageModeling,
     DataCollatorForMaskedLanguageModeling,
+    DataCollatorForPaddingOnly,
+    DataCollatorForPrefixMaskedLanguageModeling,
+    DataCollatorForRecovery,
+    FixedBarMasking,
     MultiTargetInfillingMasking,
     RandomBarMasking,
     RandomNgramMasking,
     RandomSpanMasking,
     SingleSpanMasking,
-    FixedBarMasking,
     ngram_ids_ignore_index,
 )
-
-# from .model import "MelodyModel"
 from .module import CompoundTokenFuser
 from .ngram import get_lexicon_size
-from .utils import top_k_sample
+from .utils import gumbel_sample
 
 
 class TrainingTask:
@@ -186,21 +185,23 @@ class NgramClassificationTask(TrainingTask):
         return (pitch_loss + rhythm_loss) / count
 
 
-class ReplacedTokenDetectionTask(TrainingTask):
+class RewritingTask(TrainingTask):
     def __init__(
         self,
-        task_name: str = "replaced_token_detection",
+        task_name: str = "rewriting",
         weight: float = 1.0,
         corruption_rate: float = 0.15,
         seq_len: int = 512,
-        sampling_temperature: float = 1.2,
-        sampling_top_k: int = 5,
+        random_crop: bool = True,
+        generator_size_factor: int = 2,
+        sampling_temperature: float = 1.0,
     ):
         super().__init__(task_name, weight)
         self.corruption_rate = corruption_rate
         self.seq_len = seq_len
+        self.random_crop = random_crop
+        self.generator_size_factor = generator_size_factor
         self.sampling_temperature = sampling_temperature
-        self.sampling_top_k = sampling_top_k
 
     def get_data_collator(self) -> DataCollator:
         return DataCollatorForMaskedLanguageModeling(
@@ -212,63 +213,125 @@ class ReplacedTokenDetectionTask(TrainingTask):
                 probabilities=[0.5, 0.5],
             ),
             seq_len=self.seq_len,
-            random_crop=True,
+            random_crop=self.random_crop,
         )
 
     def register_extra_modules(self, model: "MelodyModel") -> None:
-        fake_model_dim = model.model_dim / 3
-        fake_model_dim = int(round(fake_model_dim / model.num_heads) * model.num_heads)
+        fake_model_dim = model.model_dim // self.generator_size_factor
 
         model.fake_fuser = CompoundTokenFuser(model.tokenizer, model.embedding_dim, fake_model_dim)
         model.fake_transformer_encoder = nn.TransformerEncoder(
             nn.TransformerEncoderLayer(
                 d_model=fake_model_dim,
-                nhead=model.num_heads,
-                dim_feedforward=model.feedforward_dim,
+                nhead=model.num_heads // self.generator_size_factor,
+                dim_feedforward=model.feedforward_dim // self.generator_size_factor,
                 dropout=model.dropout,
                 activation=F.gelu,
                 batch_first=True,
             ),
             num_layers=model.num_layers,
         )
+        # tie embeddings
+        model.fake_fuser.embeddings = model.fuser.embeddings
 
-        model.detection_head = nn.Linear(model.model_dim, 1)
+        self.mask_token_tensor = torch.from_numpy(model.tokenizer.mask_token_ids).long()
+        self.sep_token_tensor = torch.from_numpy(model.tokenizer.sep_token_ids).long()
+        self.pad_token_tensor = torch.from_numpy(model.tokenizer.pad_token_ids).long()
+
+    def _get_attention_mask(self, source_length: int, seq_len: int) -> torch.Tensor:
+        target_length = seq_len - source_length
+        left_prefix_part = torch.zeros((seq_len, source_length), dtype=torch.bool)
+        top_right_target_part = torch.ones((source_length, target_length), dtype=torch.bool)
+        bottom_right_target_part = torch.triu(torch.ones((target_length, target_length), dtype=torch.bool), diagonal=1)
+        right_target_part = torch.cat([top_right_target_part, bottom_right_target_part], dim=0)
+        return torch.cat([left_prefix_part, right_target_part], dim=1)
 
     def __call__(self, model: "MelodyModel", batch: DataBatch, **kwargs) -> torch.Tensor:
-        # 1. Get logits from the smaller model
+        batch_size, seq_len, num_features = batch.input_ids.shape
+
+        # 1. Feed masked data to the small model for MLM task
         x = model.fake_fuser(batch.input_ids)
         x = model.fake_transformer_encoder(x, src_key_padding_mask=batch.padding_mask)
-        logits = model.fake_fuser.decode(x)
-        fake_model_loss = model._get_loss(logits, batch.label_ids)
+        x = model.fake_fuser.decode(x)
+        fake_model_loss = model._get_loss(x, batch.label_ids)
 
         # 2. Sample fake tokens
         fake_input_ids = batch.input_ids.clone()
-        mask_token_tensor = torch.tensor(model.tokenizer.mask_token_ids, device=batch.input_ids.device)
-        mask_token_tensor = mask_token_tensor.expand(batch.input_ids.shape)
+        mask_token_tensor = self.mask_token_tensor.to(fake_input_ids.device)
         replaced_token_mask = (fake_input_ids == mask_token_tensor).all(dim=-1)
-        # sample one by one?
-        batch_size, seq_len, num_features = fake_input_ids.shape
+
+        for i in range(num_features):
+            # (batch_size, seq_len, vocab_size)
+            logits = x[i]
+            sample_logits = logits[replaced_token_mask]
+            sampled = gumbel_sample(sample_logits, self.sampling_temperature).detach()
+            fake_input_ids.index_put_((replaced_token_mask, torch.tensor(i)), sampled)
+
+        # 3. Build rewriting data by concatenating the fake input and the original input
+        lengths = seq_len - batch.padding_mask.sum(dim=-1)
+        sep_token_tensor = self.sep_token_tensor.to(batch.input_ids.device).unsqueeze(0)
+        pad_token_tensor = self.pad_token_tensor.to(batch.input_ids.device).unsqueeze(0)
+        inputs, labels = [], []
+        source_lengths = []
         for i in range(batch_size):
-            for j in range(seq_len):
-                if replaced_token_mask[i, j]:
-                    for k in range(num_features):
-                        fake_input_ids[i, j, k] = top_k_sample(
-                            logits[k][i, j], k=self.sampling_top_k, t=self.sampling_temperature
-                        )
+            length = lengths[i]
+            real = batch.input_ids[i, :length]
+            fake = fake_input_ids[i, :length]
+            source_lengths.append(len(fake))
+            input = torch.cat([fake, sep_token_tensor, real[: length - 1]])
+            label = torch.cat([pad_token_tensor.repeat((len(fake), 1)), real[1:], sep_token_tensor])
+            inputs.append(input)
+            labels.append(label)
 
-        # 3. Detect replaced tokens using the real model
-        x = model.fuser(fake_input_ids)
-        x = model.transformer_encoder(x, src_key_padding_mask=batch.padding_mask)
-        x = model.detection_head(x).squeeze(-1)
-        loss_weight = batch.padding_mask.logical_not().float()
-        detection_loss = F.binary_cross_entropy_with_logits(x, replaced_token_mask.float(), weight=loss_weight)
+        # pad
+        max_length = max(len(input) for input in inputs)
+        input_ids = torch.stack(
+            [torch.cat([input, pad_token_tensor.repeat(max_length - len(input), 1)]) for input in inputs]
+        )
+        label_ids = torch.stack(
+            [torch.cat([label, pad_token_tensor.repeat(max_length - len(label), 1)]) for label in labels]
+        )
+        padding_mask = torch.arange(max_length)[None, :] >= torch.tensor(source_lengths)[:, None]
+        # attention mask
+        attention_mask = torch.stack([self._get_attention_mask(length, max_length) for length in source_lengths])
+        new_batch = DataBatch(
+            input_ids, label_ids, padding_mask.to(input_ids.device), attention_mask.to(input_ids.device)
+        )
 
-        return fake_model_loss + detection_loss
+        # 4. Feed prefixed data (fake + real) to the original model for seq2seq task
+        x = model(new_batch)
+        rewriting_loss = model._get_loss(x, new_batch.label_ids)
+
+        return fake_model_loss + rewriting_loss
 
 
-class SpanRewritingTask(TrainingTask):
-    def __init__(self, task_name: str = "span_rewriting", weight: float = 1.0):
+class RecoveryTask(TrainingTask):
+    def __init__(
+        self,
+        task_name: str = "recovery",
+        weight: float = 1.0,
+        corruption_rate: float = 0.15,
+        seq_len: int = 512,
+        random_crop: bool = True,
+    ):
         super().__init__(task_name, weight)
+        self.corruption_rate = corruption_rate
+        self.seq_len = seq_len
+        self.random_crop = random_crop
+
+    def get_data_collator(self) -> DataCollator:
+        return DataCollatorForRecovery(
+            masking=MultiTargetInfillingMasking(
+                [
+                    RandomNgramMasking(corruption_rate=self.corruption_rate, extra_data_field_name="pitch_ngrams"),
+                    RandomNgramMasking(corruption_rate=self.corruption_rate, extra_data_field_name="rhythm_ngrams"),
+                ],
+                probabilities=[0.5, 0.5],
+            ),
+            seq_len=self.seq_len,
+            random_crop=self.random_crop,
+        )
 
     def __call__(self, model: "MelodyModel", batch: DataBatch, **kwargs) -> torch.Tensor:
-        pass
+        logits = model(batch)
+        return model._get_loss(logits, batch.label_ids)

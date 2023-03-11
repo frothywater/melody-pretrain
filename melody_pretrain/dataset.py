@@ -37,7 +37,7 @@ class InfillingData(NamedTuple):
 
     sources: List[np.ndarray]
     targets: List[np.ndarray]
-    # Used for permutated span prediction
+    # Indicated that indices that the target spans will be after combined
     target_span_indices: List[int]
 
     # Used for explicit ngram prediction
@@ -1051,6 +1051,110 @@ class DataCollatorForPrefixMaskedLanguageModeling(DataCollator):
             ngram_ids=ngram_ids,
             span_indices=span_indices,
         )
+
+
+class DataCollatorForRecovery(DataCollator):
+    def __init__(
+        self,
+        masking: InfillingMasking,
+        seq_len: Optional[int] = None,
+        random_crop: bool = False,
+    ):
+        super().__init__(seq_len, random_crop)
+        self.masking = masking
+
+    def setup_tokenizer(self, tokenizer: MIDITokenizer):
+        super().setup_tokenizer(tokenizer)
+        self.masking.setup_tokenizer(tokenizer)
+
+    def _get_source_and_target(
+        self,
+        sources: List[np.ndarray],
+        targets: List[np.ndarray],
+        target_span_indices: List[int],
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        if len(targets) < 2:
+            print("Warning: too few spans to permutate")
+        assert target_span_indices == sorted(target_span_indices)
+        source_span_indices = [i for i in range(len(sources) + len(targets)) if i not in target_span_indices]
+        assert len(target_span_indices) == len(targets) and len(source_span_indices) == len(sources)
+
+        all_spans = [None for _ in range(len(sources) + len(targets))]
+        for source, index in zip(sources, source_span_indices):
+            all_spans[index] = source
+        for target, index in zip(targets, target_span_indices):
+            all_spans[index] = target
+
+        source = np.concatenate(sources, axis=0)
+        target = np.concatenate(all_spans, axis=0)
+        return source, target
+
+    def _get_input_and_label(self, source: np.ndarray, target: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        input = np.concatenate([source, [self.tokenizer.sep_token_ids], target[:-1]], axis=0)
+        label = np.concatenate(
+            [
+                np.full_like(source, self.tokenizer.pad_token_ids),
+                target[1:],
+                [self.tokenizer.sep_token_ids],
+            ],
+            axis=0,
+        )
+        return input, label
+
+    def _get_attention_mask(self, source_length: int, seq_len: int) -> torch.Tensor:
+        # bidirectional attention mask for prefix sequence
+        left_prefix_part = torch.zeros((seq_len, source_length), dtype=torch.bool)
+
+        target_length = seq_len - source_length
+        top_right_target_part = torch.ones((source_length, target_length), dtype=torch.bool)
+
+        # causal attention mask for infilling sequence
+        bottom_right_target_part = torch.triu(torch.ones((target_length, target_length), dtype=torch.bool), diagonal=1)
+
+        right_target_part = torch.cat([top_right_target_part, bottom_right_target_part], dim=0)
+        return torch.cat([left_prefix_part, right_target_part], dim=1)
+
+    def __call__(self, batch: List[DatasetItem]) -> DataBatch:
+        data_list = [item.data for item in batch]
+        extra_data_list = [item.extra_data for item in batch]
+
+        # truncate
+        data_list, offsets = self.truncate(data_list, self.seq_len, random_crop=self.random_crop)
+
+        inputs, labels = [], []
+        source_lengths, input_lengths = [], []
+        for data, extra_data, offset in zip(data_list, extra_data_list, offsets):
+            infilling_data = self.masking.mask_for_infilling(data, offset=offset, **extra_data)
+
+            source, target = self._get_source_and_target(
+                infilling_data.sources,
+                infilling_data.targets,
+                infilling_data.target_span_indices,
+            )
+            input, label = self._get_input_and_label(source, target)
+
+            inputs.append(input)
+            labels.append(label)
+            source_lengths.append(len(source))
+            input_lengths.append(len(input))
+
+        # pad
+        input_ids = torch.from_numpy(np.stack(self.pad(inputs), axis=0)).long()
+        label_ids = torch.from_numpy(np.stack(self.pad(labels), axis=0)).long()
+
+        # padding mask (batch_size, seq_len)
+        batch_size, seq_len, _ = input_ids.shape
+        padding_mask = torch.zeros((batch_size, seq_len), dtype=torch.bool)
+        for i, input_length in enumerate(input_lengths):
+            padding_mask[i, input_length:] = True
+
+        # attention mask (batch_size, seq_len, seq_len)
+        attention_mask = torch.stack(
+            [self._get_attention_mask(source_length, seq_len) for source_length in source_lengths],
+            dim=0,
+        )
+
+        return DataBatch(input_ids, label_ids, padding_mask, attention_mask)
 
 
 class MelodyDataset(Dataset):

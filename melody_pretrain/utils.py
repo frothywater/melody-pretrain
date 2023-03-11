@@ -12,3 +12,9 @@ def top_k_sample(logits: torch.Tensor, k: int, t: float = 1.0) -> torch.Tensor:
     sampled_index = torch.multinomial(top_k_probs, 1)
     sampled_token = top_k_indices.gather(0, sampled_index)
     return sampled_token
+
+
+def gumbel_sample(logits: torch.Tensor, t: float = 1.0) -> torch.Tensor:
+    noise = torch.zeros_like(logits, device=logits.device).uniform_(0, 1)
+    noise = -torch.log(-torch.log(noise))
+    return torch.argmax((logits / t) + noise, dim=-1)
