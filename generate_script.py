@@ -1,13 +1,18 @@
 import os
 import yaml
 
-from typing import Optional
+from typing import Optional, Union, List
 from argparse import ArgumentParser
 
 
 def get_infilling_pretrain_task_config(dataset_dir: str, kind: str, corruption_rate: float):
-    def get_task_config(kind: str, corruption_rate: float):
-        return {"class_path": "InfillingTask", "init_args": {"kind": kind, "corruption_rate": corruption_rate}}
+    def get_task_config(
+        kind: Union[str, List[str]], corruption_rate: float, probabilities: Optional[List[float]] = None
+    ):
+        result = {"class_path": "InfillingTask", "init_args": {"kind": kind, "corruption_rate": corruption_rate}}
+        if probabilities is not None:
+            result["init_args"]["probabilities"] = probabilities
+        return result
 
     config = {"model": {"dataset_dir": dataset_dir}, "data": {"dataset_dir": dataset_dir}, "task": []}
 
@@ -20,8 +25,14 @@ def get_infilling_pretrain_task_config(dataset_dir: str, kind: str, corruption_r
         config["task"].append(get_task_config("single", corruption_rate))
     elif kind == "ngram":
         config["data"]["load_ngram_data"] = True
-        config["task"].append(get_task_config("pitch_ngram", corruption_rate))
-        config["task"].append(get_task_config("rhythm_ngram", corruption_rate))
+        config["task"].append(get_task_config(["pitch_ngram", "rhythm_ngram"], corruption_rate))
+        # config["task"].append(get_task_config("pitch_ngram", corruption_rate))
+        # config["task"].append(get_task_config("rhythm_ngram", corruption_rate))
+    elif kind == "mixed":
+        config["data"]["load_ngram_data"] = True
+        config["task"].append(
+            get_task_config(["pitch_ngram", "rhythm_ngram", "single"], corruption_rate, probabilities=[0.25, 0.25, 0.5])
+        )
     else:
         raise ValueError(f"Unknown kind: {kind}")
 
@@ -56,12 +67,13 @@ def get_experiment_script(
         if ckpt_path is not None:
             ckpt_key = "ckpt_path" if stage == "test" else "load_from_checkpoint"
             result += f" --{ckpt_key} {ckpt_path}"
-        
+
         return result
 
-    pretrain_dir = f"{experiment_dir}/{experiment_name}/pretrain"
-    finetune_clm_dir = f"{experiment_dir}/{experiment_name}/finetune_clm"
-    finetune_infilling_dir = f"{experiment_dir}/{experiment_name}/finetune_infilling"
+    pretrain_dir = f"{experiment_dir}/model/{experiment_name}/pretrain"
+    finetune_clm_dir = f"{experiment_dir}/model/{experiment_name}/finetune_clm"
+    finetune_infilling_dir = f"{experiment_dir}/model/{experiment_name}/finetune_infilling"
+
     pretrain_ckpt_path = f"{pretrain_dir}/{ckpt_path}/step={pretrain_steps}.ckpt"
     finetune_clm_ckpt_path = f"{finetune_clm_dir}/{ckpt_path}/step={finetune_steps}.ckpt"
 
@@ -78,21 +90,20 @@ def get_experiment_script(
 def main():
     parser = ArgumentParser()
     parser.add_argument("--dataset_dir", type=str, required=True)
-    parser.add_argument("--output_dir", type=str, required=True)
     parser.add_argument("--experiment_dir", type=str, required=True)
     args = parser.parse_args()
 
-    kinds = ["ngram", "bar", "span", "single"]
+    kinds = ["ngram", "bar", "span", "single", "mixed"]
     corruption_rates = [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]
 
-    script_path = f"{args.output_dir}/run.sh"
-    os.makedirs(args.output_dir, exist_ok=True)
+    script_path = f"{args.experiment_dir}/script/run.sh"
+    os.makedirs(args.experiment_dir, exist_ok=True)
 
     scripts = []
     for kind in kinds:
         for corruption_rate in reversed(corruption_rates):
             experiment_name = f"{kind}_{int(corruption_rate * 100)}"
-            config_path = f"{args.output_dir}/{experiment_name}.yaml"
+            config_path = f"{args.experiment_dir}/script/{experiment_name}.yaml"
 
             config = get_infilling_pretrain_task_config(args.dataset_dir, kind, corruption_rate)
             with open(config_path, "w") as f:
@@ -103,7 +114,7 @@ def main():
 
     with open(script_path, "w") as f:
         f.write("\n".join(scripts))
-    
+
     os.system(f"chmod +x {script_path}")
 
 
