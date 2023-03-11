@@ -1073,8 +1073,6 @@ class DataCollatorForRecovery(DataCollator):
         targets: List[np.ndarray],
         target_span_indices: List[int],
     ) -> Tuple[np.ndarray, np.ndarray]:
-        if len(targets) < 2:
-            print("Warning: too few spans to permutate")
         assert target_span_indices == sorted(target_span_indices)
         source_span_indices = [i for i in range(len(sources) + len(targets)) if i not in target_span_indices]
         assert len(target_span_indices) == len(targets) and len(source_span_indices) == len(sources)
@@ -1085,7 +1083,11 @@ class DataCollatorForRecovery(DataCollator):
         for target, index in zip(targets, target_span_indices):
             all_spans[index] = target
 
-        source = np.concatenate(sources, axis=0)
+        if len(sources) > 0:
+            source = np.concatenate(sources, axis=0)
+        else:
+            # allow empty source, task turns into pure CLM
+            source = np.empty((0, len(self.tokenizer.field_names)))
         target = np.concatenate(all_spans, axis=0)
         return source, target
 
