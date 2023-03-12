@@ -166,7 +166,7 @@ class RewritingTask(TrainingTask):
         generator_size_factor: int = 2,
         sampling_temperature: float = 1.0,
     ):
-        super().__init__(task_name, weight)
+        super().__init__(f"{kind}_{task_name}", weight)
         self.kinds = kind if isinstance(kind, list) else [kind]
         self.probabilities = probabilities
         self.corruption_rate = corruption_rate
@@ -291,7 +291,7 @@ class RecoveryTask(TrainingTask):
         seq_len: int = 512,
         random_crop: bool = True,
     ):
-        super().__init__(task_name, weight)
+        super().__init__(f"{kind}_{task_name}", weight)
         self.kinds = kind if isinstance(kind, list) else [kind]
         self.probabilities = probabilities
         self.corruption_rate = corruption_rate

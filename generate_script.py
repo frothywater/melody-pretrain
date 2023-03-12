@@ -5,16 +5,25 @@ from typing import Optional, Union, List
 from argparse import ArgumentParser
 
 
-def get_infilling_pretrain_task_config(dataset_dir: str, kind: str, corruption_rate: float):
-    def get_task_config(
-        kind: Union[str, List[str]], corruption_rate: float, probabilities: Optional[List[float]] = None
-    ):
-        result = {"class_path": "InfillingTask", "init_args": {"kind": kind, "corruption_rate": corruption_rate}}
+def get_pretrain_config(
+    dataset_dir: str, task: str, kind: str, corruption_rate: float, probabilities: Optional[List[float]] = None
+):
+    config = {"model": {"dataset_dir": dataset_dir}, "data": {"dataset_dir": dataset_dir}, "task": []}
+
+    if task == "infilling":
+        task_name = "InfillingTask"
+    elif task == "recovery":
+        task_name = "RecoveryTask"
+    elif task == "rewriting":
+        task_name = "RewritingTask"
+    else:
+        raise ValueError(f"Unknown task: {task}")
+
+    def get_task_config(kind: Union[str, List[str]], corruption_rate: float):
+        result = {"class_path": task_name, "init_args": {"kind": kind, "corruption_rate": corruption_rate}}
         if probabilities is not None:
             result["init_args"]["probabilities"] = probabilities
         return result
-
-    config = {"model": {"dataset_dir": dataset_dir}, "data": {"dataset_dir": dataset_dir}, "task": []}
 
     if kind == "span":
         config["task"].append(get_task_config("span", corruption_rate))
@@ -25,14 +34,8 @@ def get_infilling_pretrain_task_config(dataset_dir: str, kind: str, corruption_r
         config["task"].append(get_task_config("single", corruption_rate))
     elif kind == "ngram":
         config["data"]["load_ngram_data"] = True
-        config["task"].append(get_task_config(["pitch_ngram", "rhythm_ngram"], corruption_rate))
-        # config["task"].append(get_task_config("pitch_ngram", corruption_rate))
-        # config["task"].append(get_task_config("rhythm_ngram", corruption_rate))
-    elif kind == "mixed":
-        config["data"]["load_ngram_data"] = True
-        config["task"].append(
-            get_task_config(["pitch_ngram", "rhythm_ngram", "single"], corruption_rate, probabilities=[0.25, 0.25, 0.5])
-        )
+        config["task"].append(get_task_config("pitch_ngram", corruption_rate))
+        config["task"].append(get_task_config("rhythm_ngram", corruption_rate))
     else:
         raise ValueError(f"Unknown kind: {kind}")
 
@@ -93,19 +96,19 @@ def main():
     parser.add_argument("--experiment_dir", type=str, required=True)
     args = parser.parse_args()
 
-    kinds = ["ngram", "bar", "span", "single", "mixed"]
-    corruption_rates = [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]
-
     script_path = f"{args.experiment_dir}/script/run.sh"
-    os.makedirs(args.experiment_dir, exist_ok=True)
-
+    os.makedirs(os.path.dirname(script_path), exist_ok=True)
     scripts = []
+
+    task = "recovery"
+    kinds = ["ngram"]
+    corruption_rates = [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]
     for kind in kinds:
         for corruption_rate in reversed(corruption_rates):
             experiment_name = f"{kind}_{int(corruption_rate * 100)}"
             config_path = f"{args.experiment_dir}/script/{experiment_name}.yaml"
 
-            config = get_infilling_pretrain_task_config(args.dataset_dir, kind, corruption_rate)
+            config = get_pretrain_config(args.dataset_dir, task, kind, corruption_rate)
             with open(config_path, "w") as f:
                 yaml.dump(config, f)
 
