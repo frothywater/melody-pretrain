@@ -89,49 +89,16 @@ class InfillingTask(TrainingTask):
         self.permutated_infilling = permutated_infilling
         self.span_independent_infilling = span_independent_infilling
 
-        if len(self.kinds) > 1:
-            assert self.probabilities is None or len(self.probabilities) == len(
-                self.kinds
-            ), "Probabilities length mismatch."
-            if self.probabilities is None:
-                self.probabilities = [1 / len(self.kinds)] * len(self.kinds)
-
     def get_data_collator(self) -> DataCollator:
-        def _get_one_masking(kind: str) -> DataCollator:
-            if kind == "span":
-                return RandomSpanMasking(corruption_rate=self.corruption_rate, mean_span_length=self.mean_span_length)
-            elif kind == "bar":
-                return RandomBarMasking(corruption_rate=self.corruption_rate)
-            elif kind == "pitch_ngram":
-                return RandomNgramMasking(
-                    corruption_rate=self.corruption_rate,
-                    fallback_mean_span_length=self.mean_span_length,
-                    extra_data_field_name="pitch_ngrams",
-                )
-            elif kind == "rhythm_ngram":
-                return RandomNgramMasking(
-                    corruption_rate=self.corruption_rate,
-                    fallback_mean_span_length=self.mean_span_length,
-                    extra_data_field_name="rhythm_ngrams",
-                )
-            elif kind == "single":
-                return SingleSpanMasking(corruption_rate=self.corruption_rate)
-            elif kind == "fixed_bar":
-                return FixedBarMasking(
-                    num_past_bars=6, num_middle_bars=4, num_future_bars=6, random_crop=self.random_crop
-                )
-            else:
-                raise ValueError(f"Unknown infilling kind: {kind}")
-
-        if len(self.kinds) == 1:
-            masking = _get_one_masking(self.kinds[0])
-        else:
-            masking = MultiTargetInfillingMasking(
-                [_get_one_masking(kind) for kind in self.kinds], probabilities=self.probabilities
-            )
-
+        masking = get_masking(
+            kinds=self.kinds,
+            corruption_rate=self.corruption_rate,
+            mean_span_length=self.mean_span_length,
+            random_crop=self.random_crop,
+            probabilities=self.probabilities,
+        )
         return DataCollatorForPrefixMaskedLanguageModeling(
-            masking,
+            masking=masking,
             seq_len=self.seq_len,
             random_crop=self.random_crop,
             permutated_infilling=self.permutated_infilling,
@@ -189,29 +156,36 @@ class RewritingTask(TrainingTask):
     def __init__(
         self,
         task_name: str = "rewriting",
+        kind: Union[str, List[str]] = "span",
         weight: float = 1.0,
+        probabilities: Optional[List[float]] = None,
         corruption_rate: float = 0.15,
+        mean_span_length: int = 4,
         seq_len: int = 512,
         random_crop: bool = True,
         generator_size_factor: int = 2,
         sampling_temperature: float = 1.0,
     ):
         super().__init__(task_name, weight)
+        self.kinds = kind if isinstance(kind, list) else [kind]
+        self.probabilities = probabilities
         self.corruption_rate = corruption_rate
+        self.mean_span_length = mean_span_length
         self.seq_len = seq_len
         self.random_crop = random_crop
         self.generator_size_factor = generator_size_factor
         self.sampling_temperature = sampling_temperature
 
     def get_data_collator(self) -> DataCollator:
+        masking = get_masking(
+            kinds=self.kinds,
+            corruption_rate=self.corruption_rate,
+            mean_span_length=self.mean_span_length,
+            random_crop=self.random_crop,
+            probabilities=self.probabilities,
+        )
         return DataCollatorForMaskedLanguageModeling(
-            masking=MultiTargetInfillingMasking(
-                [
-                    RandomNgramMasking(corruption_rate=self.corruption_rate, extra_data_field_name="pitch_ngrams"),
-                    RandomNgramMasking(corruption_rate=self.corruption_rate, extra_data_field_name="rhythm_ngrams"),
-                ],
-                probabilities=[0.5, 0.5],
-            ),
+            masking=masking,
             seq_len=self.seq_len,
             random_crop=self.random_crop,
         )
@@ -309,25 +283,32 @@ class RecoveryTask(TrainingTask):
     def __init__(
         self,
         task_name: str = "recovery",
+        kind: Union[str, List[str]] = "span",
         weight: float = 1.0,
+        probabilities: Optional[List[float]] = None,
         corruption_rate: float = 0.15,
+        mean_span_length: int = 4,
         seq_len: int = 512,
         random_crop: bool = True,
     ):
         super().__init__(task_name, weight)
+        self.kinds = kind if isinstance(kind, list) else [kind]
+        self.probabilities = probabilities
         self.corruption_rate = corruption_rate
+        self.mean_span_length = mean_span_length
         self.seq_len = seq_len
         self.random_crop = random_crop
 
     def get_data_collator(self) -> DataCollator:
+        masking = get_masking(
+            kinds=self.kinds,
+            corruption_rate=self.corruption_rate,
+            mean_span_length=self.mean_span_length,
+            random_crop=self.random_crop,
+            probabilities=self.probabilities,
+        )
         return DataCollatorForRecovery(
-            masking=MultiTargetInfillingMasking(
-                [
-                    RandomNgramMasking(corruption_rate=self.corruption_rate, extra_data_field_name="pitch_ngrams"),
-                    RandomNgramMasking(corruption_rate=self.corruption_rate, extra_data_field_name="rhythm_ngrams"),
-                ],
-                probabilities=[0.5, 0.5],
-            ),
+            masking=masking,
             seq_len=self.seq_len,
             random_crop=self.random_crop,
         )
@@ -335,3 +316,43 @@ class RecoveryTask(TrainingTask):
     def __call__(self, model: "MelodyModel", batch: DataBatch, **kwargs) -> torch.Tensor:
         logits = model(batch)
         return model._get_loss(logits, batch.label_ids)
+
+
+def get_masking(
+    kinds: Union[str, List[str]],
+    corruption_rate: float,
+    mean_span_length: int,
+    random_crop: bool,
+    probabilities: Optional[List[float]] = None,
+):
+    def _get_masking(kind: str):
+        if kind == "span":
+            return RandomSpanMasking(corruption_rate=corruption_rate, mean_span_length=mean_span_length)
+        elif kind == "bar":
+            return RandomBarMasking(corruption_rate=corruption_rate)
+        elif kind == "pitch_ngram":
+            return RandomNgramMasking(
+                corruption_rate=corruption_rate,
+                fallback_mean_span_length=mean_span_length,
+                extra_data_field_name="pitch_ngrams",
+            )
+        elif kind == "rhythm_ngram":
+            return RandomNgramMasking(
+                corruption_rate=corruption_rate,
+                fallback_mean_span_length=mean_span_length,
+                extra_data_field_name="rhythm_ngrams",
+            )
+        elif kind == "single":
+            return SingleSpanMasking(corruption_rate=corruption_rate)
+        elif kind == "fixed_bar":
+            return FixedBarMasking(num_past_bars=6, num_middle_bars=4, num_future_bars=6, random_crop=random_crop)
+        else:
+            raise ValueError(f"Unknown infilling kind: {kind}")
+
+    if len(kinds) == 1:
+        return _get_masking(kinds[0])
+    else:
+        assert probabilities is None or len(probabilities) == len(kinds)
+        if probabilities is None:
+            probabilities = [1 / len(kinds)] * len(kinds)
+        return MultiTargetInfillingMasking([_get_masking(kind) for kind in kinds], probabilities=probabilities)
