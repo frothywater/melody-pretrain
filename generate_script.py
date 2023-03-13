@@ -19,10 +19,12 @@ def get_pretrain_config(
     else:
         raise ValueError(f"Unknown task: {task}")
 
-    def get_task_config(kind: Union[str, List[str]], corruption_rate: float):
+    def get_task_config(kind: Union[str, List[str]], corruption_rate: float, weight: Optional[float] = None):
         result = {"class_path": task_name, "init_args": {"kind": kind, "corruption_rate": corruption_rate}}
         if probabilities is not None:
             result["init_args"]["probabilities"] = probabilities
+        if weight is not None:
+            result["init_args"]["weight"] = weight
         return result
 
     if kind == "span":
@@ -36,13 +38,18 @@ def get_pretrain_config(
         config["data"]["load_ngram_data"] = True
         config["task"].append(get_task_config("pitch_ngram", corruption_rate))
         config["task"].append(get_task_config("rhythm_ngram", corruption_rate))
+    elif kind == "ngram-single":
+        config["data"]["load_ngram_data"] = True
+        config["task"].append(get_task_config("pitch_ngram", corruption_rate, weight=0.5))
+        config["task"].append(get_task_config("rhythm_ngram", corruption_rate, weight=0.5))
+        config["task"].append(get_task_config("single", corruption_rate))
     else:
         raise ValueError(f"Unknown kind: {kind}")
 
     return config
 
 
-def get_experiment_script(
+def get_model_script(
     experiment_name: str,
     config_path: str,
     experiment_dir: str,
@@ -51,25 +58,39 @@ def get_experiment_script(
     ckpt_path: str = "lightning_logs/version_0/checkpoints",
 ):
     def get_command(stage: str, model_dir: str, ckpt_path: Optional[str] = None):
-        subcommand = "fit" if stage != "test" else "test"
-
         if stage == "pretrain":
+            subcommand = "fit"
             config_path_ = config_path
         elif stage == "finetune_clm":
+            subcommand = "fit"
             config_path_ = "config/finetune/clm.yaml"
         elif stage == "finetune_infilling":
+            subcommand = "fit"
             config_path_ = "config/finetune/infilling.yaml"
         elif stage == "test":
+            subcommand = "test"
             config_path_ = "config/predict/test_clm.yaml"
+        elif stage == "generate_clm":
+            subcommand = "predict"
+            config_path_ = "config/predict/generate_clm.yaml"
+        elif stage == "generate_infilling":
+            subcommand = "predict"
+            config_path_ = "config/predict/generate_infilling.yaml"
+        else:
+            raise ValueError(f"Unknown stage: {stage}")
 
         result = f"python main.py {subcommand}"
-        result += " --config config/trainer.yaml"
+        if "generate" not in stage:
+            result += " --config config/trainer.yaml"
         result += " --config config/model/base.yaml"
         result += f" --config {config_path_}"
         result += f" --trainer.default_root_dir {model_dir}"
         if ckpt_path is not None:
-            ckpt_key = "ckpt_path" if stage == "test" else "load_from_checkpoint"
+            ckpt_key = "ckpt_path" if stage == "test" or "generate" in stage else "load_from_checkpoint"
             result += f" --{ckpt_key} {ckpt_path}"
+        if "generate" in stage:
+            subdir = stage.split("_")[1]
+            result += f" --trainer.callbacks.output_dir {experiment_dir}/generated/{experiment_name}/{subdir}"
 
         return result
 
@@ -79,6 +100,7 @@ def get_experiment_script(
 
     pretrain_ckpt_path = f"{pretrain_dir}/{ckpt_path}/step={pretrain_steps}.ckpt"
     finetune_clm_ckpt_path = f"{finetune_clm_dir}/{ckpt_path}/step={finetune_steps}.ckpt"
+    finetune_infilling_ckpt_path = f"{finetune_infilling_dir}/{ckpt_path}/step={finetune_steps}.ckpt"
 
     lines = [
         f"# {experiment_name}",
@@ -87,7 +109,11 @@ def get_experiment_script(
         get_command("finetune_infilling", finetune_infilling_dir, pretrain_ckpt_path),
         get_command("test", finetune_clm_dir, finetune_clm_ckpt_path),
     ]
-    return "\n".join(lines)
+    predict_lines = [
+        get_command("generate_infilling", finetune_infilling_dir, finetune_infilling_ckpt_path),
+        get_command("generate_clm", finetune_clm_dir, finetune_clm_ckpt_path),
+    ]
+    return "\n".join(lines), " &\n".join(predict_lines)
 
 
 def main():
@@ -97,11 +123,13 @@ def main():
     args = parser.parse_args()
 
     script_path = f"{args.experiment_dir}/script/run.sh"
+    predict_script_path = f"{args.experiment_dir}/script/generate.sh"
     os.makedirs(os.path.dirname(script_path), exist_ok=True)
     scripts = []
+    predict_scripts = []
 
-    task = "recovery"
-    kinds = ["ngram"]
+    task = "recovery" if "recovery" in args.experiment_dir else "infilling"
+    kinds = ["span", "bar", "single", "ngram", "ngram-single"]
     corruption_rates = [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]
     for kind in kinds:
         for corruption_rate in reversed(corruption_rates):
@@ -112,13 +140,20 @@ def main():
             with open(config_path, "w") as f:
                 yaml.dump(config, f)
 
-            script = get_experiment_script(experiment_name, config_path, args.experiment_dir)
+            script, predict_script = get_model_script(experiment_name, config_path, args.experiment_dir)
             scripts.append(script)
+            if corruption_rate == 0.8:
+                predict_scripts.append(predict_script)
 
+    # scripts.append(f"python plot_loss.py --experiment_dir {args.experiment_dir}")
     with open(script_path, "w") as f:
         f.write("\n".join(scripts))
-
     os.system(f"chmod +x {script_path}")
+
+    # predict_script_path.append(f"python compute_metric.py --experiment_dir {args.experiment_dir} --dataset_dir {args.dataset_dir}")
+    with open(predict_script_path, "w") as f:
+        f.write(" &\n".join(predict_scripts))
+    os.system(f"chmod +x {predict_script_path}")
 
 
 if __name__ == "__main__":

@@ -1,6 +1,7 @@
 import os
 from argparse import ArgumentParser
 from glob import glob
+from matplotlib import pyplot as plt
 
 import numpy as np
 import pandas as pd
@@ -45,6 +46,7 @@ def get_test_data(experiment_dir: str):
 
     columns = [f"var_{i}" for i in range(num_variables)] + ["task", "value"]
     data = pd.DataFrame(results, columns=columns)
+    data.sort_values(by=columns[:-1], inplace=True)
     return data
 
 
@@ -64,22 +66,44 @@ def save_figure(data: pd.DataFrame, dest_path: str, label_0="var_0", label_1="va
     g.savefig(dest_path)
 
 
+# def main():
+#     parser = ArgumentParser()
+#     parser.add_argument("--experiment_dir", type=str, required=True)
+#     args = parser.parse_args()
+
+#     figure_path = os.path.join(args.experiment_dir, "result", "data.png")
+#     csv_path = os.path.join(args.experiment_dir, "result", "data.csv")
+#     os.makedirs(os.path.dirname(figure_path), exist_ok=True)
+
+#     data = pd.read_csv(csv_path)
+#     data = get_test_data(args.experiment_dir)
+#     data.to_csv(csv_path, index=False)
+#     save_figure(data, figure_path, label_0="model", label_1="rate", label_value="loss")
+
 def main():
-    parser = ArgumentParser()
-    parser.add_argument("--experiment_dir", type=str, required=True)
-    args = parser.parse_args()
+    df1 = pd.read_csv("experiment/ablation_infilling/result/data.csv")
+    df1["method"] = "infilling"
+    df2 = pd.read_csv("experiment/ablation_recovery/result/data.csv")
+    df2["method"] = "recovery"
 
-    figure_path = os.path.join(args.experiment_dir, "result", "data.png")
-    csv_path = os.path.join(args.experiment_dir, "result", "data.csv")
-    os.makedirs(os.path.dirname(figure_path), exist_ok=True)
+    df = pd.concat([df1, df2])
+    df.rename(columns={"var_0": "masking", "var_1": "rate", "value": "loss"}, inplace=True)
+    df.sort_values(by=["method", "task", "masking", "rate"], inplace=True)
 
-    if os.path.exists(csv_path):
-        data = pd.read_csv(csv_path)
-    else:
-        data = get_test_data(args.experiment_dir)
-        data.to_csv(csv_path, index=False)
-    save_figure(data, figure_path, label_0="model", label_1="rate", label_value="loss")
+    fig, axs = plt.subplots(1, 2, figsize=(10, 5), sharey=False)
+    sns.lineplot(data=df[df.task == "finetune_clm"], x="rate", y="loss", hue="masking", style="method", ax=axs[0])
+    sns.lineplot(data=df[df.task == "finetune_infilling"], x="rate", y="loss", hue="masking", style="method", ax=axs[1])
+    axs[0].set_title("clm")
+    axs[1].set_title("infilling")
 
+    axs[0].get_legend().remove()
+    axs[1].get_legend().remove()
+    handles, labels = axs[0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="upper right", bbox_to_anchor=(.98, .92))
+
+    fig.tight_layout()
+    fig.savefig("experiment/ablation.png")
+    df.to_csv("experiment/ablation.csv", index=False)
 
 if __name__ == "__main__":
     main()
