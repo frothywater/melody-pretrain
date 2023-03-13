@@ -301,6 +301,11 @@ class MelodyCompletionModel(MelodyModel):
         self.temperature = temperature
         self.top_k = top_k
 
+    def forward(self, input_ids: torch.Tensor, attn_mask: torch.Tensor) -> List[torch.Tensor]:
+        x = self.fuser(input_ids)
+        x = self.transformer_encoder(x, mask=attn_mask)
+        return self.fuser.decode(x)
+
     def predict_step(self, batch: DataBatch, batch_idx: int, dataloader_idx: int = 0) -> torch.Tensor:
         input_ids = batch.input_ids
         batch_size, _, _ = input_ids.shape
@@ -322,7 +327,7 @@ class MelodyCompletionModel(MelodyModel):
             attention_mask = torch.triu(torch.ones((seq_len, seq_len), dtype=torch.bool), diagonal=1).to(
                 input_ids.device
             )
-            logits = self(input_ids, attn_mask=attention_mask)
+            logits = self(input_ids, attention_mask)
             sampled_tokens = []
             for logit in logits:
                 # Decode according to the sampling strategy
@@ -379,13 +384,18 @@ class MelodyInfillingModel(MelodyModel):
 
         self.sep_token = torch.from_numpy(self.tokenizer.sep_token_ids)
 
+    def forward(self, input_ids: torch.Tensor, attn_mask: torch.Tensor) -> List[torch.Tensor]:
+        x = self.fuser(input_ids)
+        x = self.transformer_encoder(x, mask=attn_mask)
+        return self.fuser.decode(x)
+    
     def predict_step(self, batch: DataBatch, batch_idx: int, dataloader_idx: int = 0) -> torch.Tensor:
         input_ids = batch.input_ids
         batch_size, original_len, _ = input_ids.shape
         assert batch_size == 1, "Only support batch size of 1 for prediction for now"
 
         bar_field_index = self.tokenizer.field_indices["bar"]
-        bar_mask_token_id = self.tokenizer.mask_token_ids[bar_field_index]
+        bar_mask_token_id = self.tokenizer.long_mask_token_ids[bar_field_index]
         bar_sep_token_id = self.tokenizer.sep_token_ids[bar_field_index]
         mask_token_position = (input_ids[0, :, bar_field_index] == bar_mask_token_id).nonzero()[0].item()
         future_bar_token_id = input_ids[0, mask_token_position + 1, bar_field_index]
@@ -410,7 +420,7 @@ class MelodyInfillingModel(MelodyModel):
             # print("input_ids:", input_ids)
             # print("attention_mask:", attention_mask)
 
-            logits = self(input_ids, attn_mask=attention_mask)
+            logits = self(input_ids, attention_mask)
             sampled_tokens = []
             for logit in logits:
                 # Decode according to the sampling strategy
@@ -446,8 +456,6 @@ class MelodyInfillingModel(MelodyModel):
 class CustomWriter(BasePredictionWriter):
     """Write the prediction to a MIDI file."""
 
-    # TODO: Write correct file name.
-
     def __init__(self, output_dir: str):
         super().__init__(write_interval="batch")
         self.output_dir = output_dir
@@ -462,7 +470,8 @@ class CustomWriter(BasePredictionWriter):
         batch_idx: int,
         dataloader_idx: int,
     ) -> None:
-        dest_path = os.path.join(self.output_dir, f"{batch_idx}.mid")
+        filename = batch.filenames[0]
+        dest_path = os.path.join(self.output_dir, f"{filename}+{dataloader_idx}.mid")
         os.makedirs(os.path.dirname(dest_path), exist_ok=True)
         prediction = prediction[0].cpu().numpy()
         midi = pl_module.tokenizer.decode(prediction)

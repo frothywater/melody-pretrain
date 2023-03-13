@@ -4,7 +4,7 @@ trainer:
   callbacks: CustomWriter
   logger: false
   enable_checkpointing: false
-  devices: 1
+  devices: "1,"
   accelerator: gpu
   precision: 16
   strategy: ddp
@@ -18,8 +18,10 @@ model:
 data:
   dataset_dir: experiment/dataset/wikifonia
   batch_size: 1
+  num_workers: 2
   load_bar_data: true
   pitch_augumentation: false
+  times_to_predict: 5
 task:
   class_path: InfillingTask
   init_args:

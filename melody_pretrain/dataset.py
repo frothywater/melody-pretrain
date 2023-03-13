@@ -19,6 +19,7 @@ class DatasetItem(NamedTuple):
 
     data: np.ndarray
     extra_data: Dict[str, np.ndarray]
+    filename: str
 
 
 class MaskedData(NamedTuple):
@@ -59,6 +60,8 @@ class DataBatch(NamedTuple):
     label_ids: torch.Tensor
     padding_mask: torch.Tensor
     attention_mask: Optional[torch.Tensor] = None
+
+    filenames: Optional[List[str]] = None
 
     # Used for explicit ngram prediction
     ngram_types: Optional[List[str]] = None
@@ -700,6 +703,7 @@ class DataCollatorForPaddingOnly(DataCollator):
     def __call__(self, batch: List[DatasetItem]) -> DataBatch:
         # TODO: Consider right side padding for batch inference?
         data_list = [item.data for item in batch]
+        filenames = [item.filename for item in batch]
         data_list, _ = self.truncate(data_list, self.seq_len)
         input_ids = np.stack(self.pad(data_list, self.seq_len), axis=0)
         input_ids = torch.from_numpy(input_ids).long()
@@ -707,7 +711,7 @@ class DataCollatorForPaddingOnly(DataCollator):
             [[0] * len(data) + [1] * (self.seq_len - len(data)) for data in data_list], dtype=torch.bool
         )
 
-        return DataBatch(input_ids, label_ids=None, padding_mask=padding_mask)
+        return DataBatch(input_ids, label_ids=None, padding_mask=padding_mask, filenames=filenames)
 
 
 class DataCollatorForInfilling(DataCollator):
@@ -725,6 +729,7 @@ class DataCollatorForInfilling(DataCollator):
     def __call__(self, batch: List[DatasetItem]) -> DataBatch:
         data_list = [item.data for item in batch]
         extra_data_list = [item.extra_data for item in batch]
+        filenames = [item.filename for item in batch]
         # Only collect masked data
         masked_data_list = []
         for data, extra_data in zip(data_list, extra_data_list):
@@ -739,7 +744,7 @@ class DataCollatorForInfilling(DataCollator):
             [[0] * len(data) + [1] * (seq_len - len(masked_data)) for masked_data in masked_data_list], dtype=torch.bool
         )
 
-        return DataBatch(input_ids, label_ids=None, padding_mask=padding_mask)
+        return DataBatch(input_ids, label_ids=None, padding_mask=padding_mask, filenames=filenames)
 
 
 class DataCollatorForCausalLanguageModeling(DataCollator):
@@ -748,6 +753,7 @@ class DataCollatorForCausalLanguageModeling(DataCollator):
 
     def __call__(self, batch: List[DatasetItem]) -> DataBatch:
         data_list = [item.data for item in batch]
+        filenames = [item.filename for item in batch]
 
         if self.seq_len is not None:
             data_list, _ = self.truncate(data_list, self.seq_len + 1, random_crop=self.random_crop)
@@ -764,7 +770,7 @@ class DataCollatorForCausalLanguageModeling(DataCollator):
         padding_mask = torch.zeros((batch_size, seq_len), dtype=torch.bool)
         for i, length in enumerate(lengths):
             padding_mask[i, length:] = True
-        return DataBatch(input_ids, label_ids, padding_mask, attention_mask)
+        return DataBatch(input_ids, label_ids, padding_mask, attention_mask, filenames=filenames)
 
 
 class DataCollatorForMaskedLanguageModeling(DataCollator):
@@ -779,6 +785,7 @@ class DataCollatorForMaskedLanguageModeling(DataCollator):
     def __call__(self, batch: List[DatasetItem]) -> DataBatch:
         data_list = [item.data for item in batch]
         extra_data_list = [item.extra_data for item in batch]
+        filenames = [item.filename for item in batch]
 
         # truncate
         data_list, offsets = self.truncate(data_list, self.seq_len, random_crop=self.random_crop)
@@ -804,7 +811,7 @@ class DataCollatorForMaskedLanguageModeling(DataCollator):
         padding_mask = torch.zeros((batch_size, seq_len), dtype=torch.bool)
         for i, length in enumerate(lengths):
             padding_mask[i, length:] = True
-        return DataBatch(input_ids, label_ids, padding_mask)
+        return DataBatch(input_ids, label_ids, padding_mask, filenames=filenames)
 
 
 class DataCollatorForPrefixMaskedLanguageModeling(DataCollator):
@@ -955,6 +962,7 @@ class DataCollatorForPrefixMaskedLanguageModeling(DataCollator):
     def __call__(self, batch: List[DatasetItem]) -> DataBatch:
         data_list = [item.data for item in batch]
         extra_data_list = [item.extra_data for item in batch]
+        filenames = [item.filename for item in batch]
 
         # truncate
         data_list, offsets = self.truncate(data_list, self.seq_len, random_crop=self.random_crop)
@@ -1050,6 +1058,7 @@ class DataCollatorForPrefixMaskedLanguageModeling(DataCollator):
             ngram_types=ngram_types,
             ngram_ids=ngram_ids,
             span_indices=span_indices,
+            filenames=filenames,
         )
 
 
@@ -1119,6 +1128,7 @@ class DataCollatorForRecovery(DataCollator):
     def __call__(self, batch: List[DatasetItem]) -> DataBatch:
         data_list = [item.data for item in batch]
         extra_data_list = [item.extra_data for item in batch]
+        filenames = [item.filename for item in batch]
 
         # truncate
         data_list, offsets = self.truncate(data_list, self.seq_len, random_crop=self.random_crop)
@@ -1156,7 +1166,7 @@ class DataCollatorForRecovery(DataCollator):
             dim=0,
         )
 
-        return DataBatch(input_ids, label_ids, padding_mask, attention_mask)
+        return DataBatch(input_ids, label_ids, padding_mask, attention_mask, filenames=filenames)
 
 
 class MelodyDataset(Dataset):
@@ -1181,6 +1191,7 @@ class MelodyDataset(Dataset):
 
     def __getitem__(self, idx):
         file = np.load(self.files[idx])
+        filename = os.path.splitext(os.path.basename(self.files[idx]))[0]
         data = file["data"]
         if self.pitch_augumentation:
             self.tokenizer.pitch_shift_augument_(data)
@@ -1190,7 +1201,7 @@ class MelodyDataset(Dataset):
         if self.load_ngram_data:
             extra_data["pitch_ngrams"] = file["pitch_ngrams"]
             extra_data["rhythm_ngrams"] = file["rhythm_ngrams"]
-        return DatasetItem(data, extra_data)
+        return DatasetItem(data, extra_data, filename)
 
 
 class MelodyPretrainDataModule(pl.LightningDataModule):
@@ -1202,6 +1213,7 @@ class MelodyPretrainDataModule(pl.LightningDataModule):
         load_bar_data: bool = False,
         load_ngram_data: bool = False,
         pitch_augumentation: bool = True,
+        times_to_predict: int = 1,
     ):
         super().__init__()
         self.dataset_dir = dataset_dir
@@ -1215,6 +1227,7 @@ class MelodyPretrainDataModule(pl.LightningDataModule):
         self.load_bar_data = load_bar_data
         self.load_ngram_data = load_ngram_data
         self.pitch_augumentation = pitch_augumentation
+        self.times_to_predict = times_to_predict
 
         self.data_collators: Dict[str, DataCollator] = {}
 
@@ -1263,6 +1276,7 @@ class MelodyPretrainDataModule(pl.LightningDataModule):
             self.datasets["valid"] = self._make_dataset(self.valid_dir)
         if os.path.exists(self.test_dir):
             self.datasets["test"] = self._make_dataset(self.test_dir)
+            self.datasets["predict"] = self._make_dataset(self.test_dir)
 
     def register_task(self, task_name: str, collator: DataCollator):
         self.data_collators[task_name] = collator
@@ -1278,4 +1292,6 @@ class MelodyPretrainDataModule(pl.LightningDataModule):
         return self._make_data_loaders("test")
 
     def predict_dataloader(self):
+        if self.times_to_predict > 1:
+            return [self._make_data_loaders("predict") for _ in range(self.times_to_predict)]
         return self._make_data_loaders("predict")
