@@ -284,6 +284,7 @@ class MelodyCompletionModel(MelodyModel):
         prediction_bar_length: int,
         temperature: float,
         top_k: int,
+        max_length: int = 512,
         **kwargs,
     ) -> None:
         super().__init__(
@@ -300,6 +301,8 @@ class MelodyCompletionModel(MelodyModel):
         self.prediction_bar_length = prediction_bar_length
         self.temperature = temperature
         self.top_k = top_k
+        self.max_length = max_length
+        self.attention_mask = torch.triu(torch.ones((max_length, max_length), dtype=torch.bool), diagonal=1)
 
     def forward(self, input_ids: torch.Tensor, attn_mask: torch.Tensor) -> List[torch.Tensor]:
         x = self.fuser(input_ids)
@@ -316,17 +319,17 @@ class MelodyCompletionModel(MelodyModel):
         conditional_bar_token_id = self.tokenizer.encoder["bar"][self.conditional_bar_length]
         prediction_bar_token_id = self.tokenizer.encoder["bar"][self.prediction_bar_length]
 
-        conditional_bar_test = (input_ids[0, :, bar_field_index] == conditional_bar_token_id).nonzero()
-        assert conditional_bar_test.shape[1] >= 1, "No conditional bar token found in the input"
+        conditional_bar_test = (input_ids[0, :, bar_field_index] >= conditional_bar_token_id).nonzero()
+        assert len(conditional_bar_test) > 0, "No conditional bar token found in the input"
         conditional_bar_index = conditional_bar_test[0, 0].item()
         input_ids = input_ids[:, :conditional_bar_index, :]
 
         # Inference on a single sequence
-        while True:
+        while input_ids.shape[1] < self.max_length:
             seq_len = input_ids.shape[1]
-            attention_mask = torch.triu(torch.ones((seq_len, seq_len), dtype=torch.bool), diagonal=1).to(
-                input_ids.device
-            )
+            self.attention_mask = self.attention_mask.to(input_ids.device)
+            attention_mask = self.attention_mask[:seq_len, :seq_len]
+
             logits = self(input_ids, attention_mask)
             sampled_tokens = []
             for logit in logits:
@@ -335,11 +338,11 @@ class MelodyCompletionModel(MelodyModel):
                 sampled_tokens.append(sampled_token)
             sampled_tokens = torch.cat(sampled_tokens, dim=-1)
 
-            token = self.tokenizer.convert_id_to_token(sampled_tokens.cpu().numpy())
+            # token = self.tokenizer.convert_id_to_token(sampled_tokens.cpu().numpy())
             # print(token)
 
             # until the desired bar length is reached
-            if sampled_tokens[bar_field_index] == prediction_bar_token_id:
+            if sampled_tokens[bar_field_index] >= prediction_bar_token_id:
                 break
 
             # Append the sampled token to the input
@@ -366,6 +369,7 @@ class MelodyInfillingModel(MelodyModel):
         num_middle_bars: int,
         temperature: float,
         top_k: int,
+        max_length: int = 512,
         **kwargs,
     ) -> None:
         super().__init__(
@@ -381,6 +385,7 @@ class MelodyInfillingModel(MelodyModel):
         self.num_middle_bars = num_middle_bars
         self.temperature = temperature
         self.top_k = top_k
+        self.max_length = max_length
 
         self.sep_token = torch.from_numpy(self.tokenizer.sep_token_ids)
 
@@ -406,7 +411,7 @@ class MelodyInfillingModel(MelodyModel):
         # Attention mask for the prefix part
         attention_mask = torch.zeros((original_len, original_len), dtype=torch.bool).to(input_ids.device)
 
-        while True:
+        while input_ids.shape[1] < self.max_length:
             seq_len = input_ids.shape[1]
 
             # Construct causal part of the attention mask for the next token
@@ -428,13 +433,13 @@ class MelodyInfillingModel(MelodyModel):
                 sampled_tokens.append(sampled_token)
             sampled_tokens = torch.cat(sampled_tokens, dim=-1)
 
-            token = self.tokenizer.convert_id_to_token(sampled_tokens.cpu().numpy())
+            # token = self.tokenizer.convert_id_to_token(sampled_tokens.cpu().numpy())
             # print(token)
 
             # until the model predicts a seperator token, or the desired bar length is reached
             if (
                 sampled_tokens[bar_field_index] == bar_sep_token_id
-                or sampled_tokens[bar_field_index] == future_bar_token_id
+                or sampled_tokens[bar_field_index] >= future_bar_token_id
             ):
                 break
 
@@ -470,6 +475,8 @@ class CustomWriter(BasePredictionWriter):
         batch_idx: int,
         dataloader_idx: int,
     ) -> None:
+        if prediction is None:
+            return
         filename = batch.filenames[0]
         dest_path = os.path.join(self.output_dir, f"{filename}+{dataloader_idx}.mid")
         os.makedirs(os.path.dirname(dest_path), exist_ok=True)

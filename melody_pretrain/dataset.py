@@ -705,7 +705,7 @@ class DataCollatorForPaddingOnly(DataCollator):
         data_list = [item.data for item in batch]
         filenames = [item.filename for item in batch]
         data_list, _ = self.truncate(data_list, self.seq_len)
-        input_ids = np.stack(self.pad(data_list, self.seq_len), axis=0)
+        input_ids = np.stack(self.pad(data_list), axis=0)
         input_ids = torch.from_numpy(input_ids).long()
         padding_mask = torch.tensor(
             [[0] * len(data) + [1] * (self.seq_len - len(data)) for data in data_list], dtype=torch.bool
