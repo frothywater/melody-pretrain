@@ -1,8 +1,16 @@
-import glob
 import os
+
+# make sure numpy doesn't use multiple threads so that we can exploit multiprocessing
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
+
+import glob
 from argparse import ArgumentParser
 from multiprocessing import Pool
-from typing import List
+from typing import List, Optional
 
 import numpy as np
 import pandas as pd
@@ -39,17 +47,11 @@ metric_shapes = {
 metric_names = metric_labels.keys()
 
 
-def compute_mgeval_feature(files: List[str], metric: str):
+def compute_mgeval_feature(files: List[str], metric: str, starting_bar: Optional[int], num_bars: Optional[int]):
     result = np.zeros((len(files),) + metric_shapes[metric])
     for i, file in enumerate(files):
-        feature = core.extract_feature(file)
-        if metric == "total_used_note":
-            metric_result = np.sum(core.metrics().bar_used_note(feature, num_bar=32))
-        elif metric == "total_used_pitch":
-            metric_result = np.sum(core.metrics().bar_used_pitch(feature, num_bar=32))
-        else:
-            metric_result = getattr(core.metrics(), metric)(feature)
-        result[i] = metric_result
+        feature = core.extract_feature(file, starting_bar, num_bars)
+        result[i] = getattr(core.metrics(), metric)(feature)
     return result
 
 
@@ -63,8 +65,17 @@ def cross_valid(set1: np.ndarray, set2: np.ndarray):
     return result.flatten()
 
 
-def compute_group(test_feature: np.ndarray, generated_files: str, model: str, task: str, metric: str, sample: int):
-    generated_feature = compute_mgeval_feature(generated_files, metric)
+def compute_group(
+    test_feature: np.ndarray,
+    generated_files: str,
+    model: str,
+    task: str,
+    metric: str,
+    sample: int,
+    starting_bar: Optional[int],
+    num_bars: Optional[int],
+):
+    generated_feature = compute_mgeval_feature(generated_files, metric, starting_bar, num_bars)
     inter = cross_valid(generated_feature, test_feature)
     intra_gen = cross_valid(generated_feature, generated_feature)
 
@@ -84,6 +95,15 @@ def compute_group(test_feature: np.ndarray, generated_files: str, model: str, ta
 
 
 def main():
+    def get_bar_args(task: str):
+        if task == "clm":
+            starting_bar, num_bars = 4, 28
+        elif task == "infilling":
+            starting_bar, num_bars = 6, 4
+        else:
+            starting_bar, num_bars = None, None
+        return starting_bar, num_bars
+
     parser = ArgumentParser()
     parser.add_argument("--dataset_dir", type=str, required=True)
     parser.add_argument("--experiment_dir", type=str, required=True)
@@ -92,11 +112,11 @@ def main():
     generated_dir = os.path.join(args.experiment_dir, "generated")
     models = os.listdir(generated_dir)
     first_model_dir = os.path.join(generated_dir, models[0])
-    # tasks = os.listdir(first_model_dir)
-    tasks = ["clm"]
-    times_repeated = 5
+    tasks = os.listdir(first_model_dir)
     first_task_dir = os.path.join(first_model_dir, tasks[0])
     basenames = set(name.split("+")[0] for name in os.listdir(first_task_dir) if name.endswith(".mid"))
+    first_basename = next(iter(basenames))
+    times_repeated = len([file for file in os.listdir(first_task_dir) if file.split("+")[0] == first_basename])
 
     test_dir = os.path.join(args.dataset_dir, "midi", "test")
     test_files = [os.path.join(test_dir, basename + ".mid") for basename in basenames]
@@ -105,28 +125,40 @@ def main():
         if not os.path.exists(file):
             print("test file doesn't exist:", file)
             return
-    
-    # compute test files first
-    print(f"test, {len(test_files)} files")
-    with Pool(processes=4) as p:
-        test_features = p.starmap(compute_mgeval_feature, [(test_files, metric) for metric in metric_names])
-    test_features = {metric: test_feature for metric, test_feature in zip(metric_names, test_features)}
 
+    # compute test files first
+    test_features = {}
+    for task in tasks:
+        print(f"test, {task=}, {len(test_files)} files")
+        starting_bar, num_bars = get_bar_args(task)
+        with Pool() as p:
+            features = p.starmap(
+                compute_mgeval_feature, [(test_files, metric, starting_bar, num_bars) for metric in metric_names]
+            )
+        features = {metric: test_feature for metric, test_feature in zip(metric_names, features)}
+        test_features[task] = features
+
+    # prepare args
     args_list = []
     for model in models:
         for task in tasks:
             print(f"{model=}, {task=}, {times_repeated=}")
             task_dir = os.path.join(generated_dir, model, task)
             task_files = glob.glob(task_dir + "/**/*.mid", recursive=True)
+            starting_bar, num_bars = get_bar_args(task)
+
             for i in range(times_repeated):
                 group_files = [file for file in task_files if file.replace(".mid", "").split("+")[1] == str(i)]
                 if len(group_files) != len(basenames):
                     print("some generated file doesn't exist.")
                     return
-                args_list += [(test_features[metric], group_files, model, task, metric, i) for metric in metric_names]
+                args_list += [
+                    (test_features[task][metric], group_files, model, task, metric, i, starting_bar, num_bars)
+                    for metric in metric_names
+                ]
 
     # compute generated files
-    with Pool(processes=4) as p:
+    with Pool() as p:
         dataframes = p.starmap(compute_group, [args for args in args_list])
 
     all_data = pd.concat(dataframes)

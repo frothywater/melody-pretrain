@@ -3,15 +3,82 @@
 Include feature extractor and musically informed objective measures.
 Copy from: https://github.com/RichardYang40148/mgeval
 """
+import io
 import math
+from typing import Optional
 
 import midi
 import numpy as np
 import pretty_midi
+from miditoolkit.midi import KeySignature, Note, TempoChange, TimeSignature
+from miditoolkit.midi import parser as midi_parser
+
+
+def crop_midi(file: str, starting_bar: Optional[int] = None, num_bars: Optional[int] = None):
+    midi_obj = midi_parser.MidiFile(file)
+    if starting_bar is None and num_bars is None:
+        return midi_obj
+
+    starting_tick = starting_bar * midi_obj.ticks_per_beat * 4 if starting_bar is not None else 0
+    ending_tick = starting_tick + num_bars * midi_obj.ticks_per_beat * 4 if num_bars is not None else midi_obj.max_tick
+
+    last_tempo_change, last_time_sig_change, last_key_sig_change = None, None, None
+    if starting_tick > 0:
+        last_tempo_change = [tempo for tempo in midi_obj.tempo_changes if tempo.time < starting_tick]
+        last_tempo_change = last_tempo_change[-1] if len(last_tempo_change) > 0 else None
+        last_time_sig_change = [time_sig for time_sig in midi_obj.time_signature_changes if time_sig.time < starting_tick]
+        last_time_sig_change = last_time_sig_change[-1] if len(last_time_sig_change) > 0 else None
+        last_key_sig_change = [key_sig for key_sig in midi_obj.key_signature_changes if key_sig.time < starting_tick]
+        last_key_sig_change = last_key_sig_change[-1] if len(last_key_sig_change) > 0 else None
+
+    for i, track in enumerate(midi_obj.instruments):
+        midi_obj.instruments[i].notes = [
+            Note(
+                pitch=note.pitch,
+                start=note.start - starting_tick,
+                end=note.end - starting_tick,
+                velocity=note.velocity,
+            )
+            for note in track.notes
+            if starting_tick <= note.start < ending_tick
+        ]
+
+    midi_obj.tempo_changes = [
+        TempoChange(tempo=tempo.tempo, time=tempo.time - starting_tick)
+        for tempo in midi_obj.tempo_changes
+        if starting_tick <= tempo.time < ending_tick
+    ]
+    midi_obj.time_signature_changes = [
+        TimeSignature(
+            numerator=time_sig.numerator, denominator=time_sig.denominator, time=time_sig.time - starting_tick
+        )
+        for time_sig in midi_obj.time_signature_changes
+        if starting_tick <= time_sig.time < ending_tick
+    ]
+    midi_obj.key_signature_changes = [
+        KeySignature(key_name=key_sig.key_name, time=key_sig.time - starting_tick)
+        for key_sig in midi_obj.key_signature_changes
+        if starting_tick <= key_sig.time < ending_tick
+    ]
+
+    if last_tempo_change is not None:
+        midi_obj.tempo_changes.insert(0, TempoChange(tempo=last_tempo_change.tempo, time=0))
+    if last_time_sig_change is not None:
+        midi_obj.time_signature_changes.insert(
+            0,
+            TimeSignature(
+                numerator=last_time_sig_change.numerator, denominator=last_time_sig_change.denominator, time=0
+            ),
+        )
+    if last_key_sig_change is not None:
+        midi_obj.key_signature_changes.insert(0, KeySignature(key_name=last_key_sig_change.key_name, time=0))
+
+    # ignore lyrics and markers
+    return midi_obj
 
 
 # feature extractor
-def extract_feature(_file):
+def extract_feature(_file, starting_bar=None, num_bars=None):
     """
     This function extracts two midi feature:
     pretty_midi object: https://github.com/craffel/pretty-midi
@@ -21,7 +88,15 @@ def extract_feature(_file):
         dict(pretty_midi: pretty_midi object,
              midi_pattern: midi pattern contains a list of tracks)
     """
-    feature = {"pretty_midi": pretty_midi.PrettyMIDI(_file), "midi_pattern": midi.read_midifile(_file)}
+    midi_obj = crop_midi(_file, starting_bar, num_bars)
+    bytesio = io.BytesIO()
+    midi_obj.dump(file=bytesio)
+    bytesio.seek(0)
+    pretty_midi_file = pretty_midi.PrettyMIDI(bytesio)
+    bytesio.seek(0)
+    midi_pattern = midi.read_midifile(bytesio)
+    bytesio.close()
+    feature = {"pretty_midi": pretty_midi_file, "midi_pattern": midi_pattern}
     return feature
 
 
@@ -204,12 +279,17 @@ class metrics(object):
 
         if actual_bar > num_bar:
             mod = np.mod(len(piano_roll), bar_length * 128)
-            piano_roll = piano_roll[: -np.mod(len(piano_roll), bar_length)].reshape((num_bar, -1, 128))  # make exact bar
+            piano_roll = piano_roll[: -np.mod(len(piano_roll), bar_length)].reshape(
+                (num_bar, -1, 128)
+            )  # make exact bar
         elif actual_bar == num_bar:
             piano_roll = piano_roll.reshape((num_bar, -1, 128))
         else:
             piano_roll = np.pad(
-                piano_roll, ((0, int(num_bar * bar_length - len(piano_roll))), (0, 0)), mode="constant", constant_values=0
+                piano_roll,
+                ((0, int(num_bar * bar_length - len(piano_roll))), (0, 0)),
+                mode="constant",
+                constant_values=0,
             )
             piano_roll = piano_roll.reshape((num_bar, -1, 128))
 
@@ -368,10 +448,10 @@ class metrics(object):
                     # find next note off
                     for j in range(i, len(pattern[track_num])):
                         if type(pattern[track_num][j]) == midi.events.NoteOffEvent or (
-                            type(pattern[track_num][j]) == midi.events.NoteOnEvent and pattern[track_num][j].data[1] == 0
+                            type(pattern[track_num][j]) == midi.events.NoteOnEvent
+                            and pattern[track_num][j].data[1] == 0
                         ):
                             if pattern[track_num][j].data[0] == current_note:
-
                                 note_length = pattern[track_num][j].tick - current_tick
                                 distance = np.abs(np.array(hist_list) - note_length)
                                 idx = distance.argmin()
@@ -413,10 +493,10 @@ class metrics(object):
                     for j in range(i, len(pattern[track_num])):
                         # find next note off
                         if type(pattern[track_num][j]) == midi.events.NoteOffEvent or (
-                            type(pattern[track_num][j]) == midi.events.NoteOnEvent and pattern[track_num][j].data[1] == 0
+                            type(pattern[track_num][j]) == midi.events.NoteOnEvent
+                            and pattern[track_num][j].data[1] == 0
                         ):
                             if pattern[track_num][j].data[0] == current_note:
-
                                 note_length = pattern[track_num][j].tick - current_tick
                                 distance = np.abs(np.array(hist_list) - note_length)
                                 idx = distance.argmin()
@@ -429,13 +509,16 @@ class metrics(object):
                     # find previous note off/on
                     if check_previous_off is True:
                         for j in range(i - 1, 0, -1):
-                            if type(pattern[track_num][j]) == midi.events.NoteOnEvent and pattern[track_num][j].data[1] != 0:
+                            if (
+                                type(pattern[track_num][j]) == midi.events.NoteOnEvent
+                                and pattern[track_num][j].data[1] != 0
+                            ):
                                 break
 
                             elif type(pattern[track_num][j]) == midi.events.NoteOffEvent or (
-                                type(pattern[track_num][j]) == midi.events.NoteOnEvent and pattern[track_num][j].data[1] == 0
+                                type(pattern[track_num][j]) == midi.events.NoteOnEvent
+                                and pattern[track_num][j].data[1] == 0
                             ):
-
                                 note_length = current_tick - pattern[track_num][j].tick
                                 distance = np.abs(np.array(hist_list) - note_length)
                                 idx = distance.argmin()
@@ -447,7 +530,6 @@ class metrics(object):
             return note_length_hist
 
         elif normalize is True:
-
             return note_length_hist / np.sum(note_length_hist)
 
     def note_length_transition_matrix(self, feature, track_num=1, normalize=0, pause_event=False):
@@ -502,7 +584,8 @@ class metrics(object):
                     # find note off
                     for j in range(i, len(pattern[track_num])):
                         if type(pattern[track_num][j]) == midi.events.NoteOffEvent or (
-                            type(pattern[track_num][j]) == midi.events.NoteOnEvent and pattern[track_num][j].data[1] == 0
+                            type(pattern[track_num][j]) == midi.events.NoteOnEvent
+                            and pattern[track_num][j].data[1] == 0
                         ):
                             if pattern[track_num][j].data[0] == current_note:
                                 note_length = pattern[track_num][j].tick - current_tick
@@ -550,10 +633,10 @@ class metrics(object):
                     for j in range(i, len(pattern[track_num])):
                         # find next note off
                         if type(pattern[track_num][j]) == midi.events.NoteOffEvent or (
-                            type(pattern[track_num][j]) == midi.events.NoteOnEvent and pattern[track_num][j].data[1] == 0
+                            type(pattern[track_num][j]) == midi.events.NoteOnEvent
+                            and pattern[track_num][j].data[1] == 0
                         ):
                             if pattern[track_num][j].data[0] == current_note:
-
                                 note_length = pattern[track_num][j].tick - current_tick
                                 distance = np.abs(np.array(hist_list) - note_length)
                                 last_idx = idx
@@ -568,13 +651,16 @@ class metrics(object):
                     # find previous note off/on
                     if check_previous_off is True:
                         for j in range(i - 1, 0, -1):
-                            if type(pattern[track_num][j]) == midi.events.NoteOnEvent and pattern[track_num][j].data[1] != 0:
+                            if (
+                                type(pattern[track_num][j]) == midi.events.NoteOnEvent
+                                and pattern[track_num][j].data[1] != 0
+                            ):
                                 break
 
                             elif type(pattern[track_num][j]) == midi.events.NoteOffEvent or (
-                                type(pattern[track_num][j]) == midi.events.NoteOnEvent and pattern[track_num][j].data[1] == 0
+                                type(pattern[track_num][j]) == midi.events.NoteOnEvent
+                                and pattern[track_num][j].data[1] == 0
                             ):
-
                                 note_length = current_tick - pattern[track_num][j].tick
                                 distance = np.abs(np.array(hist_list) - note_length)
 
@@ -590,13 +676,11 @@ class metrics(object):
             return transition_matrix
 
         elif normalize == 1:
-
             sums = np.sum(transition_matrix, axis=1)
             sums[sums == 0] = 1
             return transition_matrix / sums.reshape(-1, 1)
 
         elif normalize == 2:
-
             return transition_matrix / sum(sum(transition_matrix))
 
         else:
