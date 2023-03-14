@@ -425,6 +425,78 @@ class RandomBarMasking(InfillingMasking):
         return InfillingData(sources, targets, target_span_indices)
 
 
+class RandomSkeletonUnitMasking(InfillingMasking):
+    need_to_mask_per_data = True
+
+    def __init__(
+        self,
+        corruption_rate: float = 0.15,
+        extra_data_field_name: str = "skeleton_note_indices",
+        rhythm_specific_masking: bool = False,
+    ):
+        super().__init__()
+        self.corruption_rate = corruption_rate
+        self.extra_data_field_name = extra_data_field_name
+        self.rhythm_specific_masking = rhythm_specific_masking
+
+    def setup_tokenizer(self, tokenizer: MIDITokenizer):
+        super().setup_tokenizer(tokenizer)
+        pitch_field_index = self.tokenizer.field_indices["pitch"]
+        tempo_field_index = self.tokenizer.field_indices["tempo"]
+        # bar, position, duration
+        self.rhythm_padding_indices = [pitch_field_index, tempo_field_index]
+
+    def _get_unit_spans(self, note_indices: np.ndarray, start: int, end: int) -> np.ndarray:
+        note_indices = note_indices[(note_indices >= start) & (note_indices < end)]
+        assert len(note_indices) > 0
+        start_indices = note_indices - start
+        end_indices = np.concatenate([start_indices[1:], [end - start]])
+        unit_spans = np.stack([start_indices, end_indices], axis=1)
+        return unit_spans
+
+    def _get_random_noise_units(self, unit_spans: np.ndarray, length: int) -> np.ndarray:
+        num_units = len(unit_spans)
+        num_noise_tokens = int(round(length * self.corruption_rate))
+        num_noise_tokens = min(max(num_noise_tokens, 1), length - 1)
+
+        # Randomly select skeleton units until we have enough noise units
+        random_unit_indices = np.arange(num_units)
+        np.random.shuffle(random_unit_indices)
+        noise_units = np.zeros(num_units, dtype=bool)
+        current_noise_tokens = 0
+        for index in random_unit_indices:
+            if current_noise_tokens >= num_noise_tokens:
+                break
+            noise_units[index] = True
+            start, end = unit_spans[index]
+            current_noise_tokens += end - start
+
+        return noise_units
+
+    def mask_for_infilling(self, data: np.ndarray, offset: int, **kwargs) -> InfillingData:
+        seq_len, _ = data.shape
+        note_indices = kwargs[self.extra_data_field_name]
+        unit_spans = self._get_unit_spans(note_indices, offset, offset + seq_len)
+        noise_units = self._get_random_noise_units(unit_spans, seq_len)
+
+        sources, targets = [], []
+        target_span_indices = []
+        for i, (start, end) in enumerate(unit_spans):
+            if noise_units[i]:
+                # noise unit
+                targets.append(data[start:end])
+                target_span_indices.append(i)
+            else:
+                # non-noise unit
+                sources.append(data[start:end])
+        return InfillingData(
+            sources,
+            targets,
+            target_span_indices,
+            field_padding_indices=self.rhythm_padding_indices if self.rhythm_specific_masking else None,
+        )
+
+
 class FixedBarMasking(InfillingMasking):
     need_to_mask_per_data = True
 
@@ -489,6 +561,7 @@ class RandomNgramMasking(InfillingMasking):
         corruption_rate: float = 0.15,
         extra_data_field_name: str = "ngrams",
         fallback_mean_span_length: int = 4,
+        field_specific_masking: bool = False,
     ):
         """Args:
         corruption_rate: corruption rate of ngram masking.
@@ -498,6 +571,7 @@ class RandomNgramMasking(InfillingMasking):
         super().__init__()
         self.corruption_rate = corruption_rate
         self.extra_data_field_name = extra_data_field_name
+        self.field_specific_masking = field_specific_masking
 
         self.random_span_masking = RandomSpanMasking(corruption_rate, fallback_mean_span_length)
 
@@ -619,7 +693,9 @@ class RandomNgramMasking(InfillingMasking):
 
         # field padding indices
         field_padding_indices = (
-            self.pitch_ngram_padding_indices if self.ngram_type == "pitch" else self.rhythm_ngram_padding_indices
+            (self.pitch_ngram_padding_indices if self.ngram_type == "pitch" else self.rhythm_ngram_padding_indices)
+            if self.field_specific_masking
+            else None
         )
 
         return InfillingData(
@@ -823,14 +899,12 @@ class DataCollatorForPrefixMaskedLanguageModeling(DataCollator):
         permutated_infilling: bool = False,
         span_independent_infilling: bool = False,
         ngram_classification: bool = False,
-        ngram_field_specific_masking: bool = False,
     ):
         super().__init__(seq_len, random_crop)
         self.masking = masking
         self.permutated_infilling = permutated_infilling
         self.span_independent_infilling = span_independent_infilling
         self.ngram_classification = ngram_classification
-        self.ngram_field_specific_masking = ngram_field_specific_masking
 
     def setup_tokenizer(self, tokenizer: MIDITokenizer):
         super().setup_tokenizer(tokenizer)
@@ -889,7 +963,7 @@ class DataCollatorForPrefixMaskedLanguageModeling(DataCollator):
         sep_positions: List[int],
         field_padding_indices: Optional[List[int]],
     ) -> Tuple[np.ndarray, np.ndarray]:
-        if self.ngram_field_specific_masking and field_padding_indices is not None:
+        if field_padding_indices is not None:
             target_labels = target.copy()
             # pad target with field padding indices, only on non [SEP] positions
             sep_position_mask = np.ones(len(target), dtype=np.bool)
@@ -1100,12 +1174,19 @@ class DataCollatorForRecovery(DataCollator):
         target = np.concatenate(all_spans, axis=0)
         return source, target
 
-    def _get_input_and_label(self, source: np.ndarray, target: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    def _get_input_and_label(
+        self, source: np.ndarray, target: np.ndarray, field_padding_indices: Optional[List[int]]
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        if field_padding_indices is not None:
+            target_labels = target.copy()
+            target_labels[:, field_padding_indices] = self.tokenizer.pad_token_ids[field_padding_indices]
+        else:
+            target_labels = target
         input = np.concatenate([source, [self.tokenizer.sep_token_ids], target[:-1]], axis=0)
         label = np.concatenate(
             [
                 np.full_like(source, self.tokenizer.pad_token_ids),
-                target[1:],
+                target_labels[1:],
                 [self.tokenizer.sep_token_ids],
             ],
             axis=0,
@@ -1143,7 +1224,9 @@ class DataCollatorForRecovery(DataCollator):
                 infilling_data.targets,
                 infilling_data.target_span_indices,
             )
-            input, label = self._get_input_and_label(source, target)
+            input, label = self._get_input_and_label(
+                source, target, field_padding_indices=infilling_data.field_padding_indices
+            )
 
             inputs.append(input)
             labels.append(label)
@@ -1175,12 +1258,14 @@ class MelodyDataset(Dataset):
         data_dir: str,
         load_bar_data: bool = False,
         load_ngram_data: bool = False,
+        load_skeleton_data: bool = False,
         pitch_augumentation: bool = False,
     ):
         self.tokenizer: MIDITokenizer
         self.files = glob(os.path.join(data_dir, "*.npz"))
         self.load_bar_data = load_bar_data
         self.load_ngram_data = load_ngram_data
+        self.load_skeleton_data = load_skeleton_data
         self.pitch_augumentation = pitch_augumentation
 
     def setup_tokenizer(self, tokenizer: MIDITokenizer):
@@ -1201,6 +1286,8 @@ class MelodyDataset(Dataset):
         if self.load_ngram_data:
             extra_data["pitch_ngrams"] = file["pitch_ngrams"]
             extra_data["rhythm_ngrams"] = file["rhythm_ngrams"]
+        if self.load_skeleton_data:
+            extra_data["skeleton_note_indices"] = file["skeleton_note_indices"]
         return DatasetItem(data, extra_data, filename)
 
 
@@ -1212,6 +1299,7 @@ class MelodyPretrainDataModule(pl.LightningDataModule):
         num_workers: int = 0,
         load_bar_data: bool = False,
         load_ngram_data: bool = False,
+        load_skeleton_data: bool = False,
         pitch_augumentation: bool = True,
         times_to_predict: int = 1,
     ):
@@ -1226,6 +1314,7 @@ class MelodyPretrainDataModule(pl.LightningDataModule):
         self.num_workers = num_workers
         self.load_bar_data = load_bar_data
         self.load_ngram_data = load_ngram_data
+        self.load_skeleton_data = load_skeleton_data
         self.pitch_augumentation = pitch_augumentation
         self.times_to_predict = times_to_predict
 
@@ -1236,6 +1325,7 @@ class MelodyPretrainDataModule(pl.LightningDataModule):
             data_dir,
             load_bar_data=self.load_bar_data,
             load_ngram_data=self.load_ngram_data,
+            load_skeleton_data=self.load_skeleton_data,
             pitch_augumentation=self.pitch_augumentation,
         )
         dataset.setup_tokenizer(self.tokenizer)

@@ -5,44 +5,48 @@ from typing import Optional, Union, List
 from argparse import ArgumentParser
 
 
-def get_pretrain_config(
-    dataset_dir: str, task: str, kind: str, corruption_rate: float, probabilities: Optional[List[float]] = None
-):
+def get_pretrain_config(dataset_dir: str, task: str, kind: str, corruption_rate: float):
     config = {"model": {"dataset_dir": dataset_dir}, "data": {"dataset_dir": dataset_dir}, "task": []}
 
-    if task == "infilling":
-        task_name = "InfillingTask"
-    elif task == "recovery":
-        task_name = "RecoveryTask"
-    elif task == "rewriting":
-        task_name = "RewritingTask"
-    else:
-        raise ValueError(f"Unknown task: {task}")
-
-    def get_task_config(kind: Union[str, List[str]], corruption_rate: float, weight: Optional[float] = None):
-        result = {"class_path": task_name, "init_args": {"kind": kind, "corruption_rate": corruption_rate}}
-        if probabilities is not None:
-            result["init_args"]["probabilities"] = probabilities
+    def get_task_config(
+        task: str, masking: Union[str, List[str]], corruption_rate: float, weight: Optional[float] = None, **kwargs
+    ):
+        if task == "infilling":
+            task_name = "InfillingTask"
+        elif task == "recovery":
+            task_name = "RecoveryTask"
+        elif task == "rewriting":
+            task_name = "RewritingTask"
+        else:
+            raise ValueError(f"Unknown task: {task}")
+        result = {"class_path": task_name, "init_args": {"kind": masking, "corruption_rate": corruption_rate, **kwargs}}
         if weight is not None:
             result["init_args"]["weight"] = weight
         return result
 
     if kind == "span":
-        config["task"].append(get_task_config("span", corruption_rate))
+        config["task"].append(get_task_config(task, "span", corruption_rate))
     elif kind == "bar":
         config["data"]["load_bar_data"] = True
-        config["task"].append(get_task_config("bar", corruption_rate))
+        config["task"].append(get_task_config(task, "bar", corruption_rate))
     elif kind == "single":
-        config["task"].append(get_task_config("single", corruption_rate))
+        config["task"].append(get_task_config(task, "single", corruption_rate))
     elif kind == "ngram":
         config["data"]["load_ngram_data"] = True
-        config["task"].append(get_task_config("pitch_ngram", corruption_rate))
-        config["task"].append(get_task_config("rhythm_ngram", corruption_rate))
+        config["task"].append(get_task_config(task, "pitch_ngram", corruption_rate))
+        config["task"].append(get_task_config(task, "rhythm_ngram", corruption_rate))
+    elif kind == "skeleton":
+        config["data"]["load_skeleton_data"] = True
+        config["task"].append(get_task_config(task, "skeleton", corruption_rate))
     elif kind == "ngram-single":
         config["data"]["load_ngram_data"] = True
-        config["task"].append(get_task_config("pitch_ngram", corruption_rate, weight=0.5))
-        config["task"].append(get_task_config("rhythm_ngram", corruption_rate, weight=0.5))
-        config["task"].append(get_task_config("single", corruption_rate))
+        config["task"].append(get_task_config(task, "pitch_ngram", corruption_rate, weight=0.5))
+        config["task"].append(get_task_config(task, "rhythm_ngram", corruption_rate, weight=0.5))
+        config["task"].append(get_task_config(task, "single", corruption_rate))
+    elif kind == "single-skeleton":
+        config["data"]["load_skeleton_data"] = True
+        config["task"].append(get_task_config(task, "single", corruption_rate))
+        config["task"].append(get_task_config(task, "skeleton", corruption_rate, field_specific_masking=True))
     else:
         raise ValueError(f"Unknown kind: {kind}")
 
@@ -129,10 +133,12 @@ def main():
     predict_scripts = []
 
     task = "recovery" if "recovery" in args.experiment_dir else "infilling"
-    kinds = ["span", "bar", "single", "ngram", "ngram-single"]
-    corruption_rates = [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]
+    # kinds = ["span", "bar", "single", "ngram", "ngram-single"]
+    kinds = ["single-skeleton", "skeleton"]
+    # corruption_rates = [0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2]
+    corruption_rates = [0.8, 0.7]
     for kind in kinds:
-        for corruption_rate in reversed(corruption_rates):
+        for corruption_rate in corruption_rates:
             experiment_name = f"{kind}_{int(corruption_rate * 100)}"
             config_path = f"{args.experiment_dir}/script/{experiment_name}.yaml"
 

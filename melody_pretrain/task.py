@@ -17,6 +17,7 @@ from .dataset import (
     MultiTargetInfillingMasking,
     RandomBarMasking,
     RandomNgramMasking,
+    RandomSkeletonUnitMasking,
     RandomSpanMasking,
     SingleSpanMasking,
     ngram_ids_ignore_index,
@@ -78,6 +79,7 @@ class InfillingTask(TrainingTask):
         random_crop: bool = True,
         permutated_infilling: bool = False,
         span_independent_infilling: bool = False,
+        field_specific_masking: bool = False,
     ):
         super().__init__(f"{kind}_{task_name}", weight)
         self.kinds = kind if isinstance(kind, list) else [kind]
@@ -88,6 +90,7 @@ class InfillingTask(TrainingTask):
         self.random_crop = random_crop
         self.permutated_infilling = permutated_infilling
         self.span_independent_infilling = span_independent_infilling
+        self.field_specific_masking = field_specific_masking
 
     def get_data_collator(self) -> DataCollator:
         masking = get_masking(
@@ -96,6 +99,7 @@ class InfillingTask(TrainingTask):
             mean_span_length=self.mean_span_length,
             random_crop=self.random_crop,
             probabilities=self.probabilities,
+            field_specific_masking=self.field_specific_masking,
         )
         return DataCollatorForPrefixMaskedLanguageModeling(
             masking=masking,
@@ -290,6 +294,7 @@ class RecoveryTask(TrainingTask):
         mean_span_length: int = 4,
         seq_len: int = 512,
         random_crop: bool = True,
+        field_specific_masking: bool = False,
     ):
         super().__init__(f"{kind}_{task_name}", weight)
         self.kinds = kind if isinstance(kind, list) else [kind]
@@ -298,6 +303,7 @@ class RecoveryTask(TrainingTask):
         self.mean_span_length = mean_span_length
         self.seq_len = seq_len
         self.random_crop = random_crop
+        self.field_specific_masking = field_specific_masking
 
     def get_data_collator(self) -> DataCollator:
         masking = get_masking(
@@ -306,6 +312,7 @@ class RecoveryTask(TrainingTask):
             mean_span_length=self.mean_span_length,
             random_crop=self.random_crop,
             probabilities=self.probabilities,
+            field_specific_masking=self.field_specific_masking,
         )
         return DataCollatorForRecovery(
             masking=masking,
@@ -324,6 +331,7 @@ def get_masking(
     mean_span_length: int,
     random_crop: bool,
     probabilities: Optional[List[float]] = None,
+    field_specific_masking: bool = False,
 ):
     def _get_masking(kind: str):
         if kind == "span":
@@ -335,12 +343,18 @@ def get_masking(
                 corruption_rate=corruption_rate,
                 fallback_mean_span_length=mean_span_length,
                 extra_data_field_name="pitch_ngrams",
+                field_specific_masking=field_specific_masking,
             )
         elif kind == "rhythm_ngram":
             return RandomNgramMasking(
                 corruption_rate=corruption_rate,
                 fallback_mean_span_length=mean_span_length,
                 extra_data_field_name="rhythm_ngrams",
+                field_specific_masking=field_specific_masking,
+            )
+        elif kind == "skeleton":
+            return RandomSkeletonUnitMasking(
+                corruption_rate=corruption_rate, rhythm_specific_masking=field_specific_masking
             )
         elif kind == "single":
             return SingleSpanMasking(corruption_rate=corruption_rate)

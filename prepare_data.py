@@ -3,6 +3,7 @@ import json
 import os
 from glob import glob
 from multiprocessing import Pool
+from typing import Optional
 
 import numpy as np
 from miditoolkit import MidiFile
@@ -13,7 +14,12 @@ from melody_pretrain.tokenizer import MIDITokenizer
 
 
 def prepare_data_job(
-    midi_file: str, dest_path: str, tokenizer: MIDITokenizer, lexicon_path: str, include_empty_bar: bool
+    midi_file: str,
+    dest_path: str,
+    tokenizer: MIDITokenizer,
+    lexicon_path: str,
+    include_empty_bar: bool,
+    skeleton_note_indices: Optional[np.ndarray],
 ):
     """Prepare data for a single midi file. Return the length of the encoded data."""
     midi = MidiFile(midi_file)
@@ -24,6 +30,9 @@ def prepare_data_job(
         pitch_ngrams, rhythm_ngrams = get_ngram_labels(midi_file, lexicon_path)
         results["pitch_ngrams"] = pitch_ngrams
         results["rhythm_ngrams"] = rhythm_ngrams
+
+    if skeleton_note_indices is not None:
+        results["skeleton_note_indices"] = skeleton_note_indices
 
     os.makedirs(os.path.dirname(dest_path), exist_ok=True)
     np.savez(dest_path, **results)
@@ -45,11 +54,22 @@ def prepare_data(midi_dir: str, dataset_dir: str, **kwargs):
 
     print(f"preparing {len(midi_files)} midi files...")
     include_empty_bar = kwargs.pop("include_empty_bar")
+
+    skeleton_info_path = kwargs.pop("skeleton_info_path")
+    if skeleton_info_path is not None:
+        skeleton_info = np.load(skeleton_info_path)
+        skeleton_note_indices_list = [skeleton_info[os.path.basename(midi_file)] for midi_file in midi_files]
+    else:
+        skeleton_note_indices_list = [None for _ in midi_files]
+
     tokenizer = MIDITokenizer(**kwargs)
     with Pool() as pool:
         futures = [
-            pool.apply_async(prepare_data_job, args=(midi_file, dest_path, tokenizer, lexicon_path, include_empty_bar))
-            for midi_file, dest_path in zip(midi_files, dest_paths)
+            pool.apply_async(
+                prepare_data_job,
+                args=(midi_file, dest_path, tokenizer, lexicon_path, include_empty_bar, skeleton_note_indices),
+            )
+            for midi_file, dest_path, skeleton_note_indices in zip(midi_files, dest_paths, skeleton_note_indices_list)
         ]
         lengths = [future.get() for future in tqdm(futures)]
 
@@ -66,6 +86,8 @@ if __name__ == "__main__":
     parser.add_argument("--pitch_range", type=int, nargs=2, default=(0, 128))
     parser.add_argument("--ngram_label", action="store_true")
     parser.add_argument("--include_empty_bar", action="store_true")
+
+    parser.add_argument("--skeleton_info_path", type=str)
 
     args = parser.parse_args()
 

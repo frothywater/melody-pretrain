@@ -10,6 +10,7 @@ from melody_pretrain.dataset import (
     MelodyPretrainDataModule,
     RandomBarMasking,
     RandomNgramMasking,
+    RandomSkeletonUnitMasking,
     SingleSpanMasking,
 )
 from melody_pretrain.ngram import get_lexicon_size
@@ -26,7 +27,7 @@ if __name__ == "__main__":
     print(f"pitch_size: {pitch_size}, rhythm_size: {rhythm_size}")
 
     data_collator = DataCollatorForRecovery(
-        RandomNgramMasking(corruption_rate=0.5, extra_data_field_name="pitch_ngrams"),
+        RandomSkeletonUnitMasking(corruption_rate=0.5),
         seq_len=30,
         random_crop=True,
     )
@@ -36,8 +37,9 @@ if __name__ == "__main__":
         num_workers=0,
         load_ngram_data=True,
         load_bar_data=True,
+        load_skeleton_data=True,
     )
-    data_module.register_task("rewriting", data_collator)
+    data_module.register_task("recovery", data_collator)
 
     data_module.setup("train")
 
