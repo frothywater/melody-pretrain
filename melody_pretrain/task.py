@@ -11,7 +11,7 @@ from .dataset import (
     DataCollatorForCausalLanguageModeling,
     DataCollatorForMaskedLanguageModeling,
     DataCollatorForPaddingOnly,
-    DataCollatorForPrefixMaskedLanguageModeling,
+    DataCollatorForInfilling,
     DataCollatorForRecovery,
     FixedBarMasking,
     MultiTargetInfillingMasking,
@@ -35,10 +35,10 @@ class TrainingTask:
     def get_data_collator(self) -> DataCollator:
         raise NotImplementedError
 
-    def register_extra_modules(self, model: "MelodyModel") -> None:
+    def register_extra_modules(self, model) -> None:
         pass
 
-    def __call__(self, model: "MelodyModel", batch: DataBatch, **kwargs) -> torch.Tensor:
+    def __call__(self, model, batch: DataBatch, **kwargs) -> torch.Tensor:
         raise NotImplementedError
 
 
@@ -47,7 +47,7 @@ class LanguageModelingTask(TrainingTask):
         self,
         task_name: str = "clm",
         weight: float = 1.0,
-        seq_len: int = 512,
+        seq_len: int = 256,
         random_crop: bool = True,
         padding_only: bool = False,
     ):
@@ -61,7 +61,7 @@ class LanguageModelingTask(TrainingTask):
             return DataCollatorForPaddingOnly(seq_len=self.seq_len)
         return DataCollatorForCausalLanguageModeling(seq_len=self.seq_len, random_crop=self.random_crop)
 
-    def __call__(self, model: "MelodyModel", batch: DataBatch, **kwargs) -> torch.Tensor:
+    def __call__(self, model, batch: DataBatch, **kwargs) -> torch.Tensor:
         logits = model(batch)
         return model._get_loss(logits, batch.label_ids)
 
@@ -75,7 +75,7 @@ class InfillingTask(TrainingTask):
         probabilities: Optional[List[float]] = None,
         corruption_rate: float = 0.15,
         mean_span_length: int = 4,
-        seq_len: int = 512,
+        seq_len: int = 256,
         random_crop: bool = True,
         permutated_infilling: bool = False,
         span_independent_infilling: bool = False,
@@ -101,7 +101,7 @@ class InfillingTask(TrainingTask):
             probabilities=self.probabilities,
             field_specific_masking=self.field_specific_masking,
         )
-        return DataCollatorForPrefixMaskedLanguageModeling(
+        return DataCollatorForInfilling(
             masking=masking,
             seq_len=self.seq_len,
             random_crop=self.random_crop,
@@ -109,7 +109,7 @@ class InfillingTask(TrainingTask):
             span_independent_infilling=self.span_independent_infilling,
         )
 
-    def __call__(self, model: "MelodyModel", batch: DataBatch, **kwargs) -> torch.Tensor:
+    def __call__(self, model, batch: DataBatch, **kwargs) -> torch.Tensor:
         logits = model(batch)
         return model._get_loss(logits, batch.label_ids)
 
@@ -118,14 +118,14 @@ class NgramClassificationTask(TrainingTask):
     def __init__(self, task_name: str = "ngram_classification", weight: float = 1.0):
         super().__init__(task_name, weight)
 
-    def register_extra_modules(self, model: "MelodyModel") -> None:
+    def register_extra_modules(self, model) -> None:
         lexicon_path = os.path.join(model.dataset_dir, "ngram_data", "lexicon.pkl")
         pitch_size, rhythm_size = get_lexicon_size(lexicon_path)
         model.pitch_ngram_head = nn.Linear(model.model_dim, pitch_size)
         model.rhythm_ngram_head = nn.Linear(model.model_dim, rhythm_size)
 
     def __call__(
-        self, model: "MelodyModel", batch: DataBatch, model_outputs: Optional[torch.Tensor] = None, **kwargs
+        self, model, batch: DataBatch, model_outputs: Optional[torch.Tensor] = None, **kwargs
     ) -> torch.Tensor:
         batch_size, seq_len, _ = model_outputs.shape
         assert len(batch.ngram_types) == batch_size, "ngram_types must be a list of length batch_size"
@@ -165,7 +165,7 @@ class RewritingTask(TrainingTask):
         probabilities: Optional[List[float]] = None,
         corruption_rate: float = 0.15,
         mean_span_length: int = 4,
-        seq_len: int = 512,
+        seq_len: int = 256,
         random_crop: bool = True,
         generator_size_factor: int = 2,
         sampling_temperature: float = 1.0,
@@ -194,7 +194,7 @@ class RewritingTask(TrainingTask):
             random_crop=self.random_crop,
         )
 
-    def register_extra_modules(self, model: "MelodyModel") -> None:
+    def register_extra_modules(self, model) -> None:
         fake_model_dim = model.model_dim // self.generator_size_factor
 
         model.fake_fuser = CompoundTokenFuser(model.tokenizer, model.embedding_dim, fake_model_dim)
@@ -224,7 +224,7 @@ class RewritingTask(TrainingTask):
         right_target_part = torch.cat([top_right_target_part, bottom_right_target_part], dim=0)
         return torch.cat([left_prefix_part, right_target_part], dim=1)
 
-    def __call__(self, model: "MelodyModel", batch: DataBatch, **kwargs) -> torch.Tensor:
+    def __call__(self, model, batch: DataBatch, **kwargs) -> torch.Tensor:
         batch_size, seq_len, num_features = batch.input_ids.shape
 
         # 1. Feed masked data to the small model for MLM task
@@ -292,7 +292,7 @@ class RecoveryTask(TrainingTask):
         probabilities: Optional[List[float]] = None,
         corruption_rate: float = 0.15,
         mean_span_length: int = 4,
-        seq_len: int = 512,
+        seq_len: int = 256,
         random_crop: bool = True,
         field_specific_masking: bool = False,
     ):
@@ -320,7 +320,7 @@ class RecoveryTask(TrainingTask):
             random_crop=self.random_crop,
         )
 
-    def __call__(self, model: "MelodyModel", batch: DataBatch, **kwargs) -> torch.Tensor:
+    def __call__(self, model, batch: DataBatch, **kwargs) -> torch.Tensor:
         logits = model(batch)
         return model._get_loss(logits, batch.label_ids)
 

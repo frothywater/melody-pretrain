@@ -3,8 +3,8 @@ import torch
 from melody_pretrain.dataset import (
     DataBatch,
     DataCollatorForCausalLanguageModeling,
+    DataCollatorForFixedInfilling,
     DataCollatorForInfilling,
-    DataCollatorForPrefixMaskedLanguageModeling,
     DataCollatorForRecovery,
     FixedBarMasking,
     MelodyPretrainDataModule,

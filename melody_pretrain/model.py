@@ -284,7 +284,7 @@ class MelodyCompletionModel(MelodyModel):
         prediction_bar_length: int,
         temperature: float,
         top_k: int,
-        max_length: int = 512,
+        max_length: int = 256,
         **kwargs,
     ) -> None:
         super().__init__(
@@ -369,7 +369,7 @@ class MelodyInfillingModel(MelodyModel):
         num_middle_bars: int,
         temperature: float,
         top_k: int,
-        max_length: int = 512,
+        max_length: int = 256,
         **kwargs,
     ) -> None:
         super().__init__(

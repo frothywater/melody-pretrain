@@ -173,6 +173,20 @@ class Masking:
 class InfillingMasking(Masking):
     def mask_for_infilling(self, data: np.ndarray, **kwargs) -> InfillingData:
         raise NotImplementedError
+    
+    def get_estimated_infilling_seq_length(self, seq_len: int) -> int:
+        num_noise_tokens = int(round(seq_len * self.corruption_rate))
+        num_noise_tokens = min(max(num_noise_tokens, 1), seq_len - 1)
+        mean_span_length = getattr(self, "mean_span_length", 3)
+        num_noise_spans = int(round(num_noise_tokens / mean_span_length))
+        # ([MASK] + <SEP>) per noise span, with some extra space
+        return seq_len + 2 * (num_noise_spans + 5)
+
+    def get_estimated_recovery_seq_length(self, seq_len: int) -> int:
+        num_noise_tokens = int(round(seq_len * self.corruption_rate))
+        num_noise_tokens = min(max(num_noise_tokens, 1), seq_len - 1)
+        # corrupted part + <SEP> + original part + (some extra space)
+        return (seq_len - num_noise_tokens) + 1 + seq_len + 5
 
 
 class MultiTargetInfillingMasking(InfillingMasking):
@@ -203,6 +217,12 @@ class MultiTargetInfillingMasking(InfillingMasking):
         index = np.random.choice(len(self.maskings), p=self.probabilities)
         masking = self.maskings[index]
         return masking.mask_for_infilling(data, **kwargs)
+
+    def get_estimated_infilling_seq_length(self, seq_len: int) -> int:
+        return max(masking.get_estimated_infilling_seq_length(seq_len) for masking in self.maskings)
+
+    def get_estimated_recovery_seq_length(self, seq_len: int) -> int:
+        return max(masking.get_estimated_recovery_seq_length(seq_len) for masking in self.maskings)
 
 
 class RandomTokenMasking(Masking):
@@ -271,6 +291,10 @@ class SingleSpanMasking(InfillingMasking):
         # target span index is always 1, since the sequence is {source, target, source}
         target_span_indices = [1]
         return InfillingData(sources, targets, target_span_indices, is_long_mask=True)
+
+    def get_estimated_infilling_seq_length(self, seq_len: int) -> int:
+        # [MASK] + <SEP>
+        return seq_len + 2
 
 
 class RandomSpanMasking(InfillingMasking):
@@ -356,6 +380,8 @@ class RandomSpanMasking(InfillingMasking):
 
 class RandomBarMasking(InfillingMasking):
     need_to_mask_per_data = True
+    # for estimate whole sequence length
+    mean_span_length = 3
 
     def __init__(self, corruption_rate: float = 0.15, extra_data_field_name: str = "bar_spans"):
         super().__init__()
@@ -427,6 +453,8 @@ class RandomBarMasking(InfillingMasking):
 
 class RandomSkeletonUnitMasking(InfillingMasking):
     need_to_mask_per_data = True
+    # for estimate whole sequence length
+    mean_span_length = 3
 
     def __init__(
         self,
@@ -554,8 +582,19 @@ class FixedBarMasking(InfillingMasking):
         target_span_indices = [1]
         return InfillingData(sources, targets, target_span_indices, is_long_mask=True)
 
+    def get_estimated_infilling_seq_length(self, seq_len: int) -> int:
+        # [MASK] + <SEP>
+        return seq_len + 2
+
+    def get_estimated_recovery_seq_length(self, seq_len: int) -> int:
+        # corrupted part + <SEP> + original part + (some extra space)
+        return (seq_len - self.num_middle_bars * 3) + 1 + seq_len + 5
+
 
 class RandomNgramMasking(InfillingMasking):
+    # for estimate whole sequence length
+    mean_span_length = 3
+
     def __init__(
         self,
         corruption_rate: float = 0.15,
@@ -709,7 +748,7 @@ class RandomNgramMasking(InfillingMasking):
 
 
 class DataCollator:
-    def __init__(self, seq_len: Optional[int] = None, random_crop: bool = False):
+    def __init__(self, seq_len: int, random_crop: bool = False):
         self.tokenizer: MIDITokenizer
         self.seq_len = seq_len
         self.random_crop = random_crop
@@ -773,7 +812,7 @@ class DataCollator:
 class DataCollatorForPaddingOnly(DataCollator):
     """Data collator for padding only, useful in inference stage."""
 
-    def __init__(self, seq_len: Optional[int] = None):
+    def __init__(self, seq_len: int):
         super().__init__(seq_len)
 
     def __call__(self, batch: List[DatasetItem]) -> DataBatch:
@@ -781,7 +820,7 @@ class DataCollatorForPaddingOnly(DataCollator):
         data_list = [item.data for item in batch]
         filenames = [item.filename for item in batch]
         data_list, _ = self.truncate(data_list, self.seq_len)
-        input_ids = np.stack(self.pad(data_list), axis=0)
+        input_ids = np.stack(self.pad(data_list, self.seq_len), axis=0)
         input_ids = torch.from_numpy(input_ids).long()
         padding_mask = torch.tensor(
             [[0] * len(data) + [1] * (self.seq_len - len(data)) for data in data_list], dtype=torch.bool
@@ -790,12 +829,12 @@ class DataCollatorForPaddingOnly(DataCollator):
         return DataBatch(input_ids, label_ids=None, padding_mask=padding_mask, filenames=filenames)
 
 
-class DataCollatorForInfilling(DataCollator):
-    """Data collator for infilling task, intended for prefix-style inference.
+class DataCollatorForFixedInfilling(DataCollator):
+    """Data collator for fixed infilling task, intended for prefix-style inference.
     Support fixed bar masking for now."""
 
-    def __init__(self, masking: FixedBarMasking):
-        super().__init__()
+    def __init__(self, masking: FixedBarMasking, seq_len: int):
+        super().__init__(seq_len)
         self.masking = masking
 
     def setup_tokenizer(self, tokenizer: MIDITokenizer):
@@ -813,44 +852,40 @@ class DataCollatorForInfilling(DataCollator):
             assert len(sources) == 2, "Fixed bar masking should generate past and future spans."
             masked_data = np.concatenate([sources[0], [self.tokenizer.long_mask_token_ids], sources[1]], axis=0)
             masked_data_list.append(masked_data)
-        input_ids = np.stack(self.pad(masked_data_list), axis=0)
+        input_ids = np.stack(self.pad(masked_data_list, self.seq_len), axis=0)
         input_ids = torch.from_numpy(input_ids).long()
-        _, seq_len, _ = input_ids.shape
         padding_mask = torch.tensor(
-            [[0] * len(data) + [1] * (seq_len - len(masked_data)) for masked_data in masked_data_list], dtype=torch.bool
+            [[0] * len(data) + [1] * (self.seq_len - len(masked_data)) for masked_data in masked_data_list],
+            dtype=torch.bool,
         )
 
         return DataBatch(input_ids, label_ids=None, padding_mask=padding_mask, filenames=filenames)
 
 
 class DataCollatorForCausalLanguageModeling(DataCollator):
-    def __init__(self, seq_len: Optional[int] = None, random_crop: bool = False):
+    def __init__(self, seq_len: int, random_crop: bool = False):
         super().__init__(seq_len, random_crop)
+        self.attention_mask = torch.triu(torch.ones((self.seq_len, self.seq_len), dtype=torch.bool), diagonal=1)
 
     def __call__(self, batch: List[DatasetItem]) -> DataBatch:
         data_list = [item.data for item in batch]
         filenames = [item.filename for item in batch]
 
-        if self.seq_len is not None:
-            data_list, _ = self.truncate(data_list, self.seq_len + 1, random_crop=self.random_crop)
-
-        lengths = [len(data) for data in data_list]
-        data_list = self.pad(data_list)
-        batched_data = np.stack(data_list, axis=0)
+        # truncate to (seq_len + 1), while effective length is still seq_len
+        data_list, _ = self.truncate(data_list, self.seq_len + 1, random_crop=self.random_crop)
+        batched_data = np.stack(self.pad(data_list, self.seq_len + 1), axis=0)
         input_ids = torch.from_numpy(batched_data[:, :-1]).long()
         label_ids = torch.from_numpy(batched_data[:, 1:]).long()
 
         # causal attention mask
-        batch_size, seq_len, _ = input_ids.shape
-        attention_mask = torch.triu(torch.ones((seq_len, seq_len), dtype=torch.bool), diagonal=1)
-        padding_mask = torch.zeros((batch_size, seq_len), dtype=torch.bool)
-        for i, length in enumerate(lengths):
-            padding_mask[i, length:] = True
-        return DataBatch(input_ids, label_ids, padding_mask, attention_mask, filenames=filenames)
+        padding_mask = torch.zeros((len(batch), self.seq_len), dtype=torch.bool)
+        for i, data in enumerate(data_list):
+            padding_mask[i, len(data) - 1 :] = True
+        return DataBatch(input_ids, label_ids, padding_mask, self.attention_mask, filenames=filenames)
 
 
 class DataCollatorForMaskedLanguageModeling(DataCollator):
-    def __init__(self, masking: Masking, seq_len: Optional[int] = None, random_crop: bool = False):
+    def __init__(self, masking: Masking, seq_len: int, random_crop: bool = False):
         super().__init__(seq_len, random_crop)
         self.masking = masking
 
@@ -873,28 +908,27 @@ class DataCollatorForMaskedLanguageModeling(DataCollator):
                 masked_data, label = self.masking.mask(data, offset=offset, **extra_data)
                 inputs.append(masked_data)
                 labels.append(label)
-            input_ids = torch.from_numpy(np.stack(self.pad(inputs), axis=0)).long()
-            label_ids = torch.from_numpy(np.stack(self.pad(labels), axis=0)).long()
+            input_ids = torch.from_numpy(np.stack(self.pad(inputs, self.seq_len), axis=0)).long()
+            label_ids = torch.from_numpy(np.stack(self.pad(labels, self.seq_len), axis=0)).long()
         else:
             # pad, and then mask all data together
-            batch = torch.from_numpy(np.stack(self.pad(data_list), axis=0)).long()
+            batch = torch.from_numpy(np.stack(self.pad(data_list, self.seq_len), axis=0)).long()
             # get dict of extra data list from list of extra data dict
             extra_data = {k: [d[k] for d in extra_data_list] for k in extra_data_list[0]}
             input_ids, label_ids = self.masking.mask_batch(batch, lengths, offsets=offsets, **extra_data)
 
         # bidirectional attention mask
-        batch_size, seq_len, _ = input_ids.shape
-        padding_mask = torch.zeros((batch_size, seq_len), dtype=torch.bool)
+        padding_mask = torch.zeros((len(batch), self.seq_len), dtype=torch.bool)
         for i, length in enumerate(lengths):
             padding_mask[i, length:] = True
         return DataBatch(input_ids, label_ids, padding_mask, filenames=filenames)
 
 
-class DataCollatorForPrefixMaskedLanguageModeling(DataCollator):
+class DataCollatorForInfilling(DataCollator):
     def __init__(
         self,
         masking: InfillingMasking,
-        seq_len: Optional[int] = None,
+        seq_len: int,
         random_crop: bool = False,
         permutated_infilling: bool = False,
         span_independent_infilling: bool = False,
@@ -905,6 +939,8 @@ class DataCollatorForPrefixMaskedLanguageModeling(DataCollator):
         self.permutated_infilling = permutated_infilling
         self.span_independent_infilling = span_independent_infilling
         self.ngram_classification = ngram_classification
+
+        self.whole_seq_length = masking.get_estimated_infilling_seq_length(seq_len)
 
     def setup_tokenizer(self, tokenizer: MIDITokenizer):
         super().setup_tokenizer(tokenizer)
@@ -1075,8 +1111,8 @@ class DataCollatorForPrefixMaskedLanguageModeling(DataCollator):
             ngram_types.append(infilling_data.ngram_type)
 
         # pad
-        input_ids = torch.from_numpy(np.stack(self.pad(inputs), axis=0)).long()
-        label_ids = torch.from_numpy(np.stack(self.pad(labels), axis=0)).long()
+        input_ids = torch.from_numpy(np.stack(self.pad(inputs, self.whole_seq_length), axis=0)).long()
+        label_ids = torch.from_numpy(np.stack(self.pad(labels, self.whole_seq_length), axis=0)).long()
 
         # padding mask (batch_size, seq_len)
         batch_size, seq_len, _ = input_ids.shape
@@ -1140,11 +1176,12 @@ class DataCollatorForRecovery(DataCollator):
     def __init__(
         self,
         masking: InfillingMasking,
-        seq_len: Optional[int] = None,
+        seq_len: int,
         random_crop: bool = False,
     ):
         super().__init__(seq_len, random_crop)
         self.masking = masking
+        self.whole_seq_length = masking.get_estimated_recovery_seq_length(seq_len)
 
     def setup_tokenizer(self, tokenizer: MIDITokenizer):
         super().setup_tokenizer(tokenizer)
@@ -1234,8 +1271,8 @@ class DataCollatorForRecovery(DataCollator):
             input_lengths.append(len(input))
 
         # pad
-        input_ids = torch.from_numpy(np.stack(self.pad(inputs), axis=0)).long()
-        label_ids = torch.from_numpy(np.stack(self.pad(labels), axis=0)).long()
+        input_ids = torch.from_numpy(np.stack(self.pad(inputs, self.whole_seq_length), axis=0)).long()
+        label_ids = torch.from_numpy(np.stack(self.pad(labels, self.whole_seq_length), axis=0)).long()
 
         # padding mask (batch_size, seq_len)
         batch_size, seq_len, _ = input_ids.shape
