@@ -65,7 +65,7 @@ def get_model_script(
     experiment_name: str,
     config_path: str,
     experiment_dir: str,
-    pretrain_steps: int = 3000,
+    pretrain_steps: int = 5000,
     finetune_steps: int = 1000,
     ckpt_path: str = "lightning_logs/version_0/checkpoints",
 ):

@@ -1,7 +1,7 @@
 # lightning.pytorch==1.8.3.post1
 seed_everything: 42
 trainer:
-  max_steps: 3000
+  max_steps: 5000
   accelerator: gpu
   devices: "1,"
   precision: 16-mixed
