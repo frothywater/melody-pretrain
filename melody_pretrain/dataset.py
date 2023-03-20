@@ -269,6 +269,8 @@ class RandomTokenMasking(Masking):
 
 
 class SingleSpanMasking(InfillingMasking):
+    need_to_mask_per_data = True
+    
     def __init__(self, corruption_rate: float = 0.5):
         super().__init__()
         self.corruption_rate = corruption_rate
@@ -380,9 +382,8 @@ class RandomSpanMasking(InfillingMasking):
 
 
 class RandomBarMasking(InfillingMasking):
-    need_to_mask_per_data = True
     # for estimate whole sequence length
-    mean_span_length = 3
+    mean_span_length = 2
 
     def __init__(self, corruption_rate: float = 0.15, extra_data_field_name: str = "bar_spans"):
         super().__init__()
@@ -461,6 +462,9 @@ class RandomBarMasking(InfillingMasking):
                 # non-noise bar
                 sources.append(data[start:end])
         return InfillingData(sources, targets, target_span_indices)
+
+    def get_estimated_infilling_seq_length(self, seq_len: int) -> int:
+        return super().get_estimated_infilling_seq_length(seq_len) + 30
 
 
 class RandomSkeletonUnitMasking(InfillingMasking):
@@ -1124,6 +1128,10 @@ class DataCollatorForInfilling(DataCollator):
             ngram_types.append(infilling_data.ngram_type)
 
         # pad
+        max_length = max(input_lengths)
+        if max_length > self.whole_seq_length:
+            print(f"adjusting whole_seq_length from {self.whole_seq_length} to {max_length}...")
+            self.whole_seq_length = max_length
         input_ids = torch.from_numpy(np.stack(self.pad(inputs, self.whole_seq_length), axis=0)).long()
         label_ids = torch.from_numpy(np.stack(self.pad(labels, self.whole_seq_length), axis=0)).long()
 
@@ -1395,7 +1403,7 @@ class MelodyPretrainDataModule(pl.LightningDataModule):
 
     def _make_data_loaders(self, split_name: str):
         if split_name not in self.datasets:
-            return None
+            return []
         if split_name != "train" and len(self.data_collators) > 1:
             raise ValueError("Only one task is supported for evaluation.")
 

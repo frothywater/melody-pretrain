@@ -174,6 +174,7 @@ class RewritingTask(TrainingTask):
         self.corruption_rate = corruption_rate
         self.mean_span_length = mean_span_length
         self.seq_len = seq_len
+        self.whole_seq_len = 2 * seq_len
         self.random_crop = random_crop
         self.generator_size_factor = generator_size_factor
         self.sampling_temperature = sampling_temperature
