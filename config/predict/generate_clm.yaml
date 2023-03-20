@@ -6,7 +6,7 @@ trainer:
   enable_checkpointing: false
   devices: "0,"
   accelerator: gpu
-  precision: 16
+  precision: 16-mixed
   strategy: ddp
 model:
   class_path: MelodyCompletionModel

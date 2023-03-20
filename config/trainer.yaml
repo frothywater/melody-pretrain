@@ -3,9 +3,9 @@ seed_everything: 42
 trainer:
   max_steps: 3000
   accelerator: gpu
-  devices: 2
-  precision: 16
-  accumulate_grad_batches: 2
+  devices: "1,"
+  precision: 16-mixed
+  accumulate_grad_batches: 1
   gradient_clip_val: 1.0
   log_every_n_steps: 1
   strategy:
@@ -26,8 +26,8 @@ trainer:
         save_weights_only: true
         filename: "{step}"
 data:
-  batch_size: 48
-  num_workers: 4
+  batch_size: 128
+  num_workers: 8
 
 # debug
 # trainer:
