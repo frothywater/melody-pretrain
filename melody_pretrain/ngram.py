@@ -141,7 +141,7 @@ def extract_onset_ngrams_job(midi_file: str, ngram_range: range):
     Return a list of (ngram tuple, note index)."""
     midi = MidiFile(midi_file)
     assert len(midi.instruments) == 1, "Only support single-track midi files."
-    midi = quantize_midi(midi)
+    # midi = quantize_midi(midi)
     onsets = [note.start for note in midi.instruments[0].notes]
 
     ngram_list = []
