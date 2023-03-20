@@ -4,9 +4,9 @@ model:
   init_args:
     embedding_dim:
       bar: 32
-      position: 256
-      duration: 256
-      pitch: 512
+      position: 128
+      duration: 128
+      pitch: 256
       tempo: 32
     model_dim: 512
     feedforward_dim: 2048
