@@ -5,12 +5,14 @@ from melody_pretrain.dataset import (
     DataCollatorForCausalLanguageModeling,
     DataCollatorForFixedInfilling,
     DataCollatorForInfilling,
+    DataCollatorForMaskedLanguageModeling,
     DataCollatorForRecovery,
     FixedBarMasking,
     MelodyPretrainDataModule,
     RandomBarMasking,
     RandomNgramMasking,
     RandomSkeletonUnitMasking,
+    RandomSpanMasking,
     SingleSpanMasking,
 )
 from melody_pretrain.ngram import get_lexicon_size
@@ -23,12 +25,12 @@ if __name__ == "__main__":
     tokenizer = MIDITokenizer()
     print(tokenizer)
 
-    pitch_size, rhythm_size = get_lexicon_size("experiment/dataset/melodynet/ngram_data/lexicon.pkl")
-    print(f"pitch_size: {pitch_size}, rhythm_size: {rhythm_size}")
+    # pitch_size, rhythm_size = get_lexicon_size("experiment/dataset/melodynet/ngram_data/lexicon.pkl")
+    # print(f"pitch_size: {pitch_size}, rhythm_size: {rhythm_size}")
 
-    data_collator = DataCollatorForRecovery(
-        RandomSkeletonUnitMasking(corruption_rate=0.5),
-        seq_len=30,
+    data_collator = DataCollatorForMaskedLanguageModeling(
+        RandomNgramMasking(corruption_rate=0.8, extra_data_field_name="pitch_ngrams"),
+        seq_len=50,
         random_crop=True,
     )
     data_module = MelodyPretrainDataModule(
@@ -39,7 +41,7 @@ if __name__ == "__main__":
         load_bar_data=True,
         load_skeleton_data=True,
     )
-    data_module.register_task("recovery", data_collator)
+    data_module.register_task("test", data_collator)
 
     data_module.setup("train")
 

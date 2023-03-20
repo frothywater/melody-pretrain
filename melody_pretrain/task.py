@@ -124,9 +124,7 @@ class NgramClassificationTask(TrainingTask):
         model.pitch_ngram_head = nn.Linear(model.model_dim, pitch_size)
         model.rhythm_ngram_head = nn.Linear(model.model_dim, rhythm_size)
 
-    def __call__(
-        self, model, batch: DataBatch, model_outputs: Optional[torch.Tensor] = None, **kwargs
-    ) -> torch.Tensor:
+    def __call__(self, model, batch: DataBatch, model_outputs: Optional[torch.Tensor] = None, **kwargs) -> torch.Tensor:
         batch_size, seq_len, _ = model_outputs.shape
         assert len(batch.ngram_types) == batch_size, "ngram_types must be a list of length batch_size"
         assert batch.ngram_ids.shape == (batch_size, seq_len), "label_ids must be of shape (batch_size, seq_len)"
@@ -201,7 +199,7 @@ class RewritingTask(TrainingTask):
         model.fake_transformer_encoder = nn.TransformerEncoder(
             nn.TransformerEncoderLayer(
                 d_model=fake_model_dim,
-                nhead=model.num_heads // self.generator_size_factor,
+                nhead=model.num_heads,
                 dim_feedforward=model.feedforward_dim // self.generator_size_factor,
                 dropout=model.dropout,
                 activation=F.gelu,
@@ -212,20 +210,31 @@ class RewritingTask(TrainingTask):
         # tie embeddings
         model.fake_fuser.embeddings = model.fuser.embeddings
 
-        self.mask_token_tensor = torch.from_numpy(model.tokenizer.mask_token_ids).long()
-        self.sep_token_tensor = torch.from_numpy(model.tokenizer.sep_token_ids).long()
-        self.pad_token_tensor = torch.from_numpy(model.tokenizer.pad_token_ids).long()
+        self.mask_token_tensor = torch.tensor(model.tokenizer.mask_token_ids, dtype=torch.long)
+        self.sep_token_tensor = torch.tensor(model.tokenizer.sep_token_ids, dtype=torch.long)
+        self.pad_token_tensor = torch.tensor(model.tokenizer.pad_token_ids, dtype=torch.long)
+        self.sep_token_tensor.unsqueeze_(0)
+        self.pad_token_tensor.unsqueeze_(0)
 
-    def _get_attention_mask(self, source_length: int, seq_len: int) -> torch.Tensor:
+    def _move_tensors(self, device: torch.device):
+        if self.mask_token_tensor.device != device:
+            self.mask_token_tensor = self.mask_token_tensor.to(device)
+            self.sep_token_tensor = self.sep_token_tensor.to(device)
+            self.pad_token_tensor = self.pad_token_tensor.to(device)
+
+    def _get_attention_mask(self, source_length: int, seq_len: int, device: torch.device) -> torch.Tensor:
         target_length = seq_len - source_length
-        left_prefix_part = torch.zeros((seq_len, source_length), dtype=torch.bool)
-        top_right_target_part = torch.ones((source_length, target_length), dtype=torch.bool)
-        bottom_right_target_part = torch.triu(torch.ones((target_length, target_length), dtype=torch.bool), diagonal=1)
+        left_prefix_part = torch.zeros((seq_len, source_length), dtype=torch.bool, device=device)
+        top_right_target_part = torch.ones((source_length, target_length), dtype=torch.bool, device=device)
+        bottom_right_target_part = torch.triu(
+            torch.ones((target_length, target_length), dtype=torch.bool, device=device), diagonal=1
+        )
         right_target_part = torch.cat([top_right_target_part, bottom_right_target_part], dim=0)
         return torch.cat([left_prefix_part, right_target_part], dim=1)
 
     def __call__(self, model, batch: DataBatch, **kwargs) -> torch.Tensor:
-        batch_size, seq_len, num_features = batch.input_ids.shape
+        batch_size, _, num_features = batch.input_ids.shape
+        self._move_tensors(model.device)
 
         # 1. Feed masked data to the small model for MLM task
         x = model.fake_fuser(batch.input_ids)
@@ -235,8 +244,7 @@ class RewritingTask(TrainingTask):
 
         # 2. Sample fake tokens
         fake_input_ids = batch.input_ids.clone()
-        mask_token_tensor = self.mask_token_tensor.to(fake_input_ids.device)
-        replaced_token_mask = (fake_input_ids == mask_token_tensor).all(dim=-1)
+        replaced_token_mask = (fake_input_ids == self.mask_token_tensor).all(dim=-1)
 
         for i in range(num_features):
             # (batch_size, seq_len, vocab_size)
@@ -246,40 +254,43 @@ class RewritingTask(TrainingTask):
             fake_input_ids.index_put_((replaced_token_mask, torch.tensor(i)), sampled)
 
         # 3. Build rewriting data by concatenating the fake input and the original input
-        lengths = seq_len - batch.padding_mask.sum(dim=-1)
-        sep_token_tensor = self.sep_token_tensor.to(batch.input_ids.device).unsqueeze(0)
-        pad_token_tensor = self.pad_token_tensor.to(batch.input_ids.device).unsqueeze(0)
         inputs, labels = [], []
-        source_lengths = []
+        source_lengths, input_lengths = [], []
         for i in range(batch_size):
-            length = lengths[i]
+            length = batch.lengths[i]
             real = batch.input_ids[i, :length]
             fake = fake_input_ids[i, :length]
-            source_lengths.append(len(fake))
-            input = torch.cat([fake, sep_token_tensor, real[: length - 1]])
-            label = torch.cat([pad_token_tensor.repeat((len(fake), 1)), real[1:], sep_token_tensor])
+            input = torch.cat([fake, self.sep_token_tensor, real[:-1]])
+            label = torch.cat([self.pad_token_tensor.repeat((len(fake), 1)), real[1:], self.sep_token_tensor])
             inputs.append(input)
             labels.append(label)
+            source_lengths.append(len(fake))
+            input_lengths.append(len(input))
 
         # pad
-        max_length = max(len(input) for input in inputs)
         input_ids = torch.stack(
-            [torch.cat([input, pad_token_tensor.repeat(max_length - len(input), 1)]) for input in inputs]
+            [torch.cat([input, self.pad_token_tensor.repeat(self.whole_seq_len - len(input), 1)]) for input in inputs]
         )
         label_ids = torch.stack(
-            [torch.cat([label, pad_token_tensor.repeat(max_length - len(label), 1)]) for label in labels]
+            [torch.cat([label, self.pad_token_tensor.repeat(self.whole_seq_len - len(label), 1)]) for label in labels]
         )
-        padding_mask = torch.arange(max_length)[None, :] >= torch.tensor(source_lengths)[:, None]
+        padding_mask = (
+            torch.arange(self.whole_seq_len, device=model.device)[None, :]
+            >= torch.tensor(input_lengths, device=model.device)[:, None]
+        )
         # attention mask
-        attention_mask = torch.stack([self._get_attention_mask(length, max_length) for length in source_lengths])
-        new_batch = DataBatch(
-            input_ids, label_ids, padding_mask.to(input_ids.device), attention_mask.to(input_ids.device)
+        attention_mask = torch.stack(
+            [self._get_attention_mask(length, self.whole_seq_len, model.device) for length in source_lengths]
         )
+        new_batch = DataBatch(input_ids, label_ids, padding_mask, attention_mask)
 
         # 4. Feed prefixed data (fake + real) to the original model for seq2seq task
         x = model(new_batch)
         rewriting_loss = model._get_loss(x, new_batch.label_ids)
 
+        if model.training:
+            model.log(f"train_loss:fake_mlm", fake_model_loss, sync_dist=True, batch_size=batch_size)
+            model.log(f"train_loss:rewriting", rewriting_loss, sync_dist=True, batch_size=batch_size)
         return fake_model_loss + rewriting_loss
 
 

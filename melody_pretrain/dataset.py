@@ -61,6 +61,7 @@ class DataBatch(NamedTuple):
     padding_mask: torch.Tensor
     attention_mask: Optional[torch.Tensor] = None
 
+    lengths: Optional[List[int]] = None
     filenames: Optional[List[str]] = None
 
     # Used for explicit ngram prediction
@@ -426,6 +427,17 @@ class RandomBarMasking(InfillingMasking):
 
         return noise_bars
 
+    def mask_batch(
+        self, inputs: torch.Tensor, lengths: List[int], offsets: List[int], **kwargs
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        noise_spans_list = []
+        bars_list = kwargs[self.extra_data_field_name]
+        for length, offset, bars in zip(lengths, offsets, bars_list):
+            bars = self._process_bar_spans(bars, offset, offset + length)
+            noise_bars = self._get_random_noise_bars(bars, length)
+            noise_spans_list.append(bars[noise_bars])
+        return self._mask_batch_with_noise_spans(inputs, noise_spans_list)
+
     def mask_for_infilling(self, data: np.ndarray, offset: int, **kwargs) -> InfillingData:
         """Mask data with random bars for infilling. Put a single mask token for each bar.
         Args:
@@ -684,7 +696,8 @@ class RandomNgramMasking(InfillingMasking):
             else:
                 starts = ngrams[noise_ngram_indices, 0]
                 lengths = ngrams[noise_ngram_indices, 1]
-                noise_ngram_spans = np.stack([starts, lengths], axis=1)
+                ends = starts + lengths
+                noise_ngram_spans = np.stack([starts, ends], axis=1)
             noise_spans_list.append(noise_ngram_spans)
 
         return self._mask_batch_with_noise_spans(inputs, noise_spans_list)
@@ -921,7 +934,7 @@ class DataCollatorForMaskedLanguageModeling(DataCollator):
         padding_mask = torch.zeros((len(batch), self.seq_len), dtype=torch.bool)
         for i, length in enumerate(lengths):
             padding_mask[i, length:] = True
-        return DataBatch(input_ids, label_ids, padding_mask, filenames=filenames)
+        return DataBatch(input_ids, label_ids, padding_mask, lengths=lengths, filenames=filenames)
 
 
 class DataCollatorForInfilling(DataCollator):
