@@ -78,7 +78,7 @@ def main():
     csv_path = os.path.join(args.experiment_dir, "result", "data.csv")
     os.makedirs(os.path.dirname(figure_path), exist_ok=True)
 
-    data = pd.read_csv(csv_path)
+    # data = pd.read_csv(csv_path)
     data = get_test_data(args.experiment_dir)
     data.to_csv(csv_path, index=False)
     save_figure(data, figure_path, label_0="model", label_1="rate", label_value="loss")
@@ -93,16 +93,12 @@ def plot_combined():
     df = pd.concat([df1, df2])
     df.rename(columns={"var_0": "masking", "var_1": "rate", "value": "loss"}, inplace=True)
     df.sort_values(by=["method", "task", "masking", "rate"], inplace=True)
-    # df = df[df.masking != "span"]
-    # df = df[df.masking != "bar"]
 
     fig, axs = plt.subplots(1, 2, figsize=(10, 5), sharey=False)
     sns.lineplot(data=df[df.task == "finetune_clm"], x="rate", y="loss", hue="masking", style="method", ax=axs[0])
     sns.lineplot(data=df[df.task == "finetune_infilling"], x="rate", y="loss", hue="masking", style="method", ax=axs[1])
     axs[0].set_title("clm")
     axs[1].set_title("infilling")
-    axs[0].set_ylim(top=0.52)
-    axs[1].set_ylim(top=0.20)
 
     axs[0].get_legend().remove()
     sns.move_legend(axs[1], "upper left", bbox_to_anchor=(1, 1))
