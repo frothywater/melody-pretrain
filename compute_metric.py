@@ -14,15 +14,14 @@ from typing import List, Optional
 
 import numpy as np
 import pandas as pd
-import seaborn as sns
 from sklearn.model_selection import LeaveOneOut
 
-from metric.mgeval import core, utils
+from metric.jazzeval.core import compute_groove_similarity, compute_pitch_entropy
+from metric.mgeval.core import extract_feature as mgeval_extract_feature
+from metric.mgeval.core import metrics as mgeval_metrics
+from metric.mgeval.utils import c_dist, kl_dist, overlap_area
 
-sns.set(rc={"figure.dpi": 300, "savefig.dpi": 300})
-sns.set_style("ticks")
-
-metric_labels = {
+mgeval_metric_labels = {
     # "total_used_pitch": "PC",
     # "total_used_note": "NC",
     "total_pitch_class_histogram": "PCH",
@@ -33,7 +32,7 @@ metric_labels = {
     "note_length_hist": "NLH",
     "note_length_transition_matrix": "NLTM",
 }
-metric_shapes = {
+mgeval_metric_shapes = {
     # "total_used_pitch": (1,),
     # "total_used_note": (1,),
     "total_pitch_class_histogram": (12,),
@@ -44,15 +43,27 @@ metric_shapes = {
     "note_length_hist": (12,),
     "note_length_transition_matrix": (12, 12),
 }
-metric_names = metric_labels.keys()
+mgeval_metric_names = mgeval_metric_labels.keys()
+jazzeval_metric_names = ["pitch_entropy_1", "pitch_entropy_4", "groove_similarity"]
 
 
 def compute_mgeval_feature(files: List[str], metric: str, starting_bar: Optional[int], num_bars: Optional[int]):
-    result = np.zeros((len(files),) + metric_shapes[metric])
+    result = np.zeros((len(files),) + mgeval_metric_shapes[metric])
     for i, file in enumerate(files):
-        feature = core.extract_feature(file, starting_bar, num_bars)
-        result[i] = getattr(core.metrics(), metric)(feature)
+        feature = mgeval_extract_feature(file, starting_bar, num_bars)
+        result[i] = getattr(mgeval_metrics(), metric)(feature)
     return result
+
+
+def compute_jazzeval_metrics(files: List[str], metric: str, starting_bar: Optional[int], num_bars: Optional[int]):
+    if metric == "pitch_entropy_1":
+        return np.array([compute_pitch_entropy(file, 1, starting_bar, num_bars) for file in files])
+    elif metric == "pitch_entropy_4":
+        return np.array([compute_pitch_entropy(file, 4, starting_bar, num_bars) for file in files])
+    elif metric == "groove_similarity":
+        return np.array([compute_groove_similarity(file, starting_bar, num_bars) for file in files])
+    else:
+        raise ValueError(f"unknown metric: {metric}")
 
 
 def cross_valid(set1: np.ndarray, set2: np.ndarray):
@@ -61,7 +72,7 @@ def cross_valid(set1: np.ndarray, set2: np.ndarray):
     loo.get_n_splits(np.arange(num_samples))
     result = np.zeros((num_samples, num_samples))
     for _, test_index in loo.split(np.arange(num_samples)):
-        result[test_index[0]] = utils.c_dist(set1[test_index], set2)
+        result[test_index[0]] = c_dist(set1[test_index], set2)
     return result.flatten()
 
 
@@ -75,15 +86,18 @@ def compute_group(
     starting_bar: Optional[int],
     num_bars: Optional[int],
 ):
-    generated_feature = compute_mgeval_feature(generated_files, metric, starting_bar, num_bars)
-    inter = cross_valid(generated_feature, test_feature)
-    intra_gen = cross_valid(generated_feature, generated_feature)
-
     data = []
-    # data.append({"kind": "mean", "value": np.mean(intra_gen)})
-    # data.append({"kind": "std", "value": np.std(intra_gen)})
-    # data.append({"kind": "kldiv", "value": utils.kl_dist(intra_gen, inter)})
-    data.append({"kind": "oa", "value": utils.overlap_area(intra_gen, inter)})
+    if metric in mgeval_metric_names:
+        generated_feature = compute_mgeval_feature(generated_files, metric, starting_bar, num_bars)
+        inter = cross_valid(generated_feature, test_feature)
+        intra_gen = cross_valid(generated_feature, generated_feature)
+        # data.append({"kind": "mean", "value": np.mean(intra_gen)})
+        # data.append({"kind": "std", "value": np.std(intra_gen)})
+        # data.append({"kind": "kldiv", "value": kl_dist(intra_gen, inter)})
+        data.append({"kind": "oa", "value": overlap_area(intra_gen, inter)})
+    elif metric in jazzeval_metric_names:
+        values = compute_jazzeval_metrics(generated_files, metric, starting_bar, num_bars)
+        data.append({"kind": "mean", "value": np.mean(values)})
 
     print(f"completed: {model=}, {task=}, {metric=}, {sample=}")
     df = pd.DataFrame(data)
@@ -133,9 +147,9 @@ def main():
         starting_bar, num_bars = get_bar_args(task)
         with Pool() as p:
             features = p.starmap(
-                compute_mgeval_feature, [(test_files, metric, starting_bar, num_bars) for metric in metric_names]
+                compute_mgeval_feature, [(test_files, metric, starting_bar, num_bars) for metric in mgeval_metric_names]
             )
-        features = {metric: test_feature for metric, test_feature in zip(metric_names, features)}
+        features = {metric: test_feature for metric, test_feature in zip(mgeval_metric_names, features)}
         test_features[task] = features
 
     # prepare args
@@ -152,21 +166,25 @@ def main():
                 if len(group_files) != len(basenames):
                     print("some generated file doesn't exist.")
                     return
+                # args_list += [
+                #     (test_features[task][metric], group_files, model, task, metric, i, starting_bar, num_bars)
+                #     for metric in mgeval_metric_names
+                # ]
                 args_list += [
-                    (test_features[task][metric], group_files, model, task, metric, i, starting_bar, num_bars)
-                    for metric in metric_names
+                    (None, group_files, model, task, metric, i, starting_bar, num_bars)
+                    for metric in jazzeval_metric_names
                 ]
 
     # compute generated files
     with Pool() as p:
         dataframes = p.starmap(compute_group, [args for args in args_list])
 
-    all_data = pd.concat(dataframes)
-    groupby = all_data.groupby(["model", "task", "metric", "kind"])
-    mean = groupby["value"].mean()
-    std = groupby["value"].std()
-    df = pd.DataFrame({"mean": mean, "std": std}).reset_index()
-    csv_path = os.path.join(args.experiment_dir, "result", "oa.csv")
+    df = pd.concat(dataframes)
+    # groupby = df.groupby(["model", "task", "metric", "kind"])
+    # mean = groupby["value"].mean()
+    # std = groupby["value"].std()
+    # df = pd.DataFrame({"mean": mean, "std": std}).reset_index()
+    csv_path = os.path.join(args.experiment_dir, "result", "oa1.csv")
     df.to_csv(csv_path, index=False)
 
 
