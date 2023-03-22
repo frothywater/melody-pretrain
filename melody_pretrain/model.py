@@ -1,5 +1,5 @@
 import os
-from typing import List, Dict, Optional, Sequence, Tuple, Union
+from typing import Dict, List, Optional, Sequence, Tuple, Union
 
 import lightning as pl
 import torch
@@ -8,13 +8,13 @@ import torch.nn.functional as F
 from lightning.pytorch.callbacks import BasePredictionWriter
 
 from .dataset import DataBatch
-from .tokenizer import MIDITokenizer
-from .task import TrainingTask
 from .module import CompoundTokenFuser, SpanPositionalEncoding
+from .task import TrainingTask
+from .tokenizer import MIDITokenizer
 from .utils import top_k_sample
 
-
 DataBatchDict = Dict[str, DataBatch]
+
 
 class MelodyModel(pl.LightningModule):
     """Base model for core step logic."""
@@ -238,6 +238,8 @@ class MelodyTestingModel(MelodyModel):
         assert (
             len(batch.attention_mask.shape) == 2
         ), "Only support calculating perplexity for CLM model, where attention mask should be 2D."
+        if self.pad_token_tensor.device != self.device:
+            self.pad_token_tensor = self.pad_token_tensor.to(self.device)
 
         nlls = []
         previous_end_index = 0
@@ -247,7 +249,7 @@ class MelodyTestingModel(MelodyModel):
 
             # Mask out context tokens for labels
             new_label_ids = batch.label_ids[:, start_index:end_index, :].clone()
-            new_label_ids[:, :-target_length] = self.pad_token_tensor.to(new_label_ids.device)
+            new_label_ids[:, :-target_length] = self.pad_token_tensor
             new_batch = DataBatch(
                 input_ids=batch.input_ids[:, start_index:end_index, :],
                 label_ids=new_label_ids,
@@ -387,17 +389,19 @@ class MelodyInfillingModel(MelodyModel):
         self.top_k = top_k
         self.max_length = max_length
 
-        self.sep_token = torch.from_numpy(self.tokenizer.sep_token_ids)
+        self.sep_token_tensor = torch.tensor(self.tokenizer.sep_token_ids, dtype=torch.long)
 
     def forward(self, input_ids: torch.Tensor, attn_mask: torch.Tensor) -> List[torch.Tensor]:
         x = self.fuser(input_ids)
         x = self.transformer_encoder(x, mask=attn_mask)
         return self.fuser.decode(x)
-    
+
     def predict_step(self, batch: DataBatch, batch_idx: int, dataloader_idx: int = 0) -> torch.Tensor:
         input_ids = batch.input_ids
         batch_size, original_len, _ = input_ids.shape
         assert batch_size == 1, "Only support batch size of 1 for prediction for now"
+        if self.sep_token_tensor.device != self.device:
+            self.sep_token_tensor = self.sep_token_tensor.to(self.device)
 
         bar_field_index = self.tokenizer.field_indices["bar"]
         bar_mask_token_id = self.tokenizer.long_mask_token_ids[bar_field_index]
@@ -406,18 +410,17 @@ class MelodyInfillingModel(MelodyModel):
         future_bar_token_id = input_ids[0, mask_token_position + 1, bar_field_index]
 
         # Add one seperator token to the end
-        self.sep_token = self.sep_token.to(input_ids.device)
-        input_ids = torch.cat([input_ids, self.sep_token.unsqueeze(0).unsqueeze(0)], dim=1)
+        input_ids = torch.cat([input_ids, self.sep_token_tensor.unsqueeze(0).unsqueeze(0)], dim=1)
         # Attention mask for the prefix part
-        attention_mask = torch.zeros((original_len, original_len), dtype=torch.bool).to(input_ids.device)
+        attention_mask = torch.zeros((original_len, original_len), dtype=torch.bool, device=self.device)
 
         while input_ids.shape[1] < self.max_length:
             seq_len = input_ids.shape[1]
 
             # Construct causal part of the attention mask for the next token
             previous_len = attention_mask.shape[0]
-            mask_column = torch.ones((previous_len, 1), dtype=torch.bool).to(attention_mask.device)
-            attn_row = torch.zeros((1, seq_len), dtype=torch.bool).to(attention_mask.device)
+            mask_column = torch.ones((previous_len, 1), dtype=torch.bool, device=self.device)
+            attn_row = torch.zeros((1, seq_len), dtype=torch.bool, device=self.device)
             attention_mask = torch.cat([attention_mask, mask_column], dim=1)
             attention_mask = torch.cat([attention_mask, attn_row], dim=0)
             # (previous_len, previous_len) -> (seq_len, seq_len)
