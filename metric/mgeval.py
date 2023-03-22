@@ -1,7 +1,7 @@
 # coding:utf-8
 """core.py
 Include feature extractor and musically informed objective measures.
-Copy from: https://github.com/RichardYang40148/mgeval
+Copied from: https://github.com/RichardYang40148/mgeval
 """
 import io
 import math

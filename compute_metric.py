@@ -1,190 +1,61 @@
-import os
-
-# make sure numpy doesn't use multiple threads so that we can exploit multiprocessing
-os.environ["OMP_NUM_THREADS"] = "1"
-os.environ["OPENBLAS_NUM_THREADS"] = "1"
-os.environ["MKL_NUM_THREADS"] = "1"
-os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
-os.environ["NUMEXPR_NUM_THREADS"] = "1"
-
 import glob
+import os
 from argparse import ArgumentParser
-from multiprocessing import Pool
-from typing import List, Optional
 
-import numpy as np
-import pandas as pd
-from sklearn.model_selection import LeaveOneOut
-
-from metric.jazzeval.core import compute_groove_similarity, compute_pitch_entropy
-from metric.mgeval.core import extract_feature as mgeval_extract_feature
-from metric.mgeval.core import metrics as mgeval_metrics
-from metric.mgeval.utils import c_dist, kl_dist, overlap_area
-
-mgeval_metric_labels = {
-    # "total_used_pitch": "PC",
-    # "total_used_note": "NC",
-    "total_pitch_class_histogram": "PCH",
-    "pitch_class_transition_matrix": "PCTM",
-    "pitch_range": "PR",
-    "avg_pitch_interval": "PI",
-    "avg_IOI": "IOI",
-    "note_length_hist": "NLH",
-    "note_length_transition_matrix": "NLTM",
-}
-mgeval_metric_shapes = {
-    # "total_used_pitch": (1,),
-    # "total_used_note": (1,),
-    "total_pitch_class_histogram": (12,),
-    "pitch_class_transition_matrix": (12, 12),
-    "pitch_range": (1,),
-    "avg_pitch_interval": (1,),
-    "avg_IOI": (1,),
-    "note_length_hist": (12,),
-    "note_length_transition_matrix": (12, 12),
-}
-mgeval_metric_names = mgeval_metric_labels.keys()
-jazzeval_metric_names = ["pitch_entropy_1", "pitch_entropy_4", "groove_similarity"]
+from metric.metrics import compute_all_metrics_for_models
 
 
-def compute_mgeval_feature(files: List[str], metric: str, starting_bar: Optional[int], num_bars: Optional[int]):
-    result = np.zeros((len(files),) + mgeval_metric_shapes[metric])
-    for i, file in enumerate(files):
-        feature = mgeval_extract_feature(file, starting_bar, num_bars)
-        result[i] = getattr(mgeval_metrics(), metric)(feature)
-    return result
-
-
-def compute_jazzeval_metrics(files: List[str], metric: str, starting_bar: Optional[int], num_bars: Optional[int]):
-    if metric == "pitch_entropy_1":
-        return np.array([compute_pitch_entropy(file, 1, starting_bar, num_bars) for file in files])
-    elif metric == "pitch_entropy_4":
-        return np.array([compute_pitch_entropy(file, 4, starting_bar, num_bars) for file in files])
-    elif metric == "groove_similarity":
-        return np.array([compute_groove_similarity(file, starting_bar, num_bars) for file in files])
-    else:
-        raise ValueError(f"unknown metric: {metric}")
-
-
-def cross_valid(set1: np.ndarray, set2: np.ndarray):
-    loo = LeaveOneOut()
-    num_samples = len(set1)
-    loo.get_n_splits(np.arange(num_samples))
-    result = np.zeros((num_samples, num_samples))
-    for _, test_index in loo.split(np.arange(num_samples)):
-        result[test_index[0]] = c_dist(set1[test_index], set2)
-    return result.flatten()
-
-
-def compute_group(
-    test_feature: np.ndarray,
-    generated_files: str,
-    model: str,
-    task: str,
-    metric: str,
-    sample: int,
-    starting_bar: Optional[int],
-    num_bars: Optional[int],
-):
-    data = []
-    if metric in mgeval_metric_names:
-        generated_feature = compute_mgeval_feature(generated_files, metric, starting_bar, num_bars)
-        inter = cross_valid(generated_feature, test_feature)
-        intra_gen = cross_valid(generated_feature, generated_feature)
-        # data.append({"kind": "mean", "value": np.mean(intra_gen)})
-        # data.append({"kind": "std", "value": np.std(intra_gen)})
-        # data.append({"kind": "kldiv", "value": kl_dist(intra_gen, inter)})
-        data.append({"kind": "oa", "value": overlap_area(intra_gen, inter)})
-    elif metric in jazzeval_metric_names:
-        values = compute_jazzeval_metrics(generated_files, metric, starting_bar, num_bars)
-        data.append({"kind": "mean", "value": np.mean(values)})
-
-    print(f"completed: {model=}, {task=}, {metric=}, {sample=}")
-    df = pd.DataFrame(data)
-    df["model"] = model
-    df["task"] = task
-    df["metric"] = metric
-    df["sample"] = sample
-    return df
+def split_sample_number(file: str):
+    basename = os.path.basename(file).replace(".mid", "")
+    name, sample_number = basename.split("+")
+    return name, int(sample_number)
 
 
 def main():
-    def get_bar_args(task: str):
-        if task == "clm":
-            starting_bar, num_bars = 4, 28
-        elif task == "infilling":
-            starting_bar, num_bars = 6, 4
-        else:
-            starting_bar, num_bars = None, None
-        return starting_bar, num_bars
-
     parser = ArgumentParser()
     parser.add_argument("--dataset_dir", type=str, required=True)
     parser.add_argument("--experiment_dir", type=str, required=True)
     args = parser.parse_args()
+    tasks = ["clm"]
 
+    # get basenames and the number of times each file is repeated
     generated_dir = os.path.join(args.experiment_dir, "generated")
+    test_dir = os.path.join(args.dataset_dir, "midi", "test")
     models = os.listdir(generated_dir)
     first_model_dir = os.path.join(generated_dir, models[0])
-    tasks = os.listdir(first_model_dir)
     first_task_dir = os.path.join(first_model_dir, tasks[0])
-    basenames = set(name.split("+")[0] for name in os.listdir(first_task_dir) if name.endswith(".mid"))
+    basenames = set(split_sample_number(file)[0] for file in os.listdir(first_task_dir) if file.endswith(".mid"))
     first_basename = next(iter(basenames))
-    times_repeated = len([file for file in os.listdir(first_task_dir) if file.split("+")[0] == first_basename])
+    # assume that all the generated files are repeated the same number of times
+    times_repeated = len(
+        [file for file in os.listdir(first_task_dir) if split_sample_number(file)[0] == first_basename]
+    )
 
-    test_dir = os.path.join(args.dataset_dir, "midi", "test")
+    # check if files exist
     test_files = [os.path.join(test_dir, basename + ".mid") for basename in basenames]
-
     for file in test_files:
         if not os.path.exists(file):
-            print("test file doesn't exist:", file)
-            return
-
-    # compute test files first
-    test_features = {}
-    for task in tasks:
-        print(f"test, {task=}, {len(test_files)} files")
-        starting_bar, num_bars = get_bar_args(task)
-        with Pool() as p:
-            features = p.starmap(
-                compute_mgeval_feature, [(test_files, metric, starting_bar, num_bars) for metric in mgeval_metric_names]
-            )
-        features = {metric: test_feature for metric, test_feature in zip(mgeval_metric_names, features)}
-        test_features[task] = features
-
-    # prepare args
-    args_list = []
+            return print("test file doesn't exist:", file)
+    generated_files_dict = {}
     for model in models:
         for task in tasks:
-            print(f"{model=}, {task=}, {times_repeated=}")
             task_dir = os.path.join(generated_dir, model, task)
             task_files = glob.glob(task_dir + "/**/*.mid", recursive=True)
-            starting_bar, num_bars = get_bar_args(task)
-
             for i in range(times_repeated):
-                group_files = [file for file in task_files if file.replace(".mid", "").split("+")[1] == str(i)]
+                group_files = [file for file in task_files if split_sample_number(file)[1] == i]
                 if len(group_files) != len(basenames):
-                    print("some generated file doesn't exist.")
-                    return
-                # args_list += [
-                #     (test_features[task][metric], group_files, model, task, metric, i, starting_bar, num_bars)
-                #     for metric in mgeval_metric_names
-                # ]
-                args_list += [
-                    (None, group_files, model, task, metric, i, starting_bar, num_bars)
-                    for metric in jazzeval_metric_names
-                ]
+                    return print("some generated file doesn't exist.")
+                generated_files_dict[f"{model}/{task}/{i}"] = group_files
 
-    # compute generated files
-    with Pool() as p:
-        dataframes = p.starmap(compute_group, [args for args in args_list])
+    # compute metrics
+    df = compute_all_metrics_for_models(test_files, generated_files_dict)
 
-    df = pd.concat(dataframes)
-    # groupby = df.groupby(["model", "task", "metric", "kind"])
-    # mean = groupby["value"].mean()
-    # std = groupby["value"].std()
-    # df = pd.DataFrame({"mean": mean, "std": std}).reset_index()
-    csv_path = os.path.join(args.experiment_dir, "result", "oa1.csv")
+    # divide generated files into groups
+    df["sample"] = df["model"].apply(lambda x: x.split("/")[2] if x != "test" else None)
+    df["task"] = df["model"].apply(lambda x: x.split("/")[1] if x != "test" else None)
+    df["model"] = df["model"].apply(lambda x: x.split("/")[0] if x != "test" else "test")
+
+    csv_path = os.path.join(args.experiment_dir, "result", "oa.csv")
     df.to_csv(csv_path, index=False)
 
 
