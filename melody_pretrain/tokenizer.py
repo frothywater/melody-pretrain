@@ -20,6 +20,9 @@ class MIDICompoundToken(NamedTuple):
     pitch: AnyField
     tempo: AnyField
 
+    def __str__(self) -> str:
+        return f"[bar:{self.bar:>7}, pos:{self.position:>7}, dur:{self.duration:>7}, pit:{self.pitch:>7}, tmp:{self.tempo:>7}]"
+
 
 class MIDITokenizer:
     def __init__(self, granularity=64, max_bar=128, pitch_range: Tuple[int, int] = (0, 128)) -> None:
@@ -79,7 +82,7 @@ class MIDITokenizer:
         self.sep_token_str = "<SEP>"
         self.cls_token_str = "<CLS>"
         self.mask_token_str = "[MASK]"
-        self.long_mask_token_str = "[longMASK]"
+        self.long_mask_token_str = "[lMASK]"
         self.bos_token = MIDICompoundToken(*[self.bos_token_str] * len(self.field_names))
         self.eos_token = MIDICompoundToken(*[self.eos_token_str] * len(self.field_names))
         self.pad_token = MIDICompoundToken(*[self.pad_token_str] * len(self.field_names))
@@ -144,6 +147,9 @@ class MIDITokenizer:
             duration = self._find_nearest(self.duration_bins, note.end - note.start)
             tempo = self._find_nearest(self.tempo_bins, tempo_changes[current_tempo_index].tempo)
             tokens.append(MIDICompoundToken(bar, position, duration, note.pitch, tempo))
+
+        # prepend <BOS> and append <EOS>
+        tokens = [self.bos_token] + tokens + [self.eos_token]
         return tokens
 
     def detokenize(self, tokens: List[MIDICompoundToken], velocity=100) -> MidiFile:
@@ -233,20 +239,28 @@ class MIDITokenizer:
         bar_field_index = self.field_indices["bar"]
         if not include_empty_bar:
             num_tokens, _ = token_ids.shape
-            bar_fields = token_ids[:, bar_field_index]
+            # only take actual tokens between <BOS> and <EOS> tokens
+            # assert np.all(token_ids[0] == self.bos_token_ids) and np.all(token_ids[-1] == self.eos_token_ids)
+            bar_fields = token_ids[1:-1, bar_field_index]
             bar_start_mask = np.concatenate([[True], bar_fields[:-1] != bar_fields[1:]])
-            bar_start_indices = np.extract(bar_start_mask, np.arange(num_tokens, dtype=np.int16))
-            bar_end_indices = np.concatenate([bar_start_indices[1:], [num_tokens]], dtype=np.int16)
+            bar_start_indices = np.extract(bar_start_mask, np.arange(num_tokens - 2, dtype=np.int16))
+            bar_end_indices = np.concatenate([bar_start_indices[1:], [num_tokens - 2]], dtype=np.int16)
             bar_spans = np.stack([bar_start_indices, bar_end_indices], axis=1)
+            # offset 1 to account for <BOS> and <EOS> tokens
+            bar_spans += 1
+            bar_spans[0, 0] = 0  # start of the first bar is always 0
+            bar_spans[-1, 1] = num_tokens  # end of the last bar is always num_tokens
             return bar_spans
         else:
             bar_spans = []
             current_bar, last_index = 0, 0
             for index, token in enumerate(token_ids):
+                # consider <BOS> and <EOS> tokens
+                if np.all(token == self.bos_token_ids) or np.all(token == self.eos_token_ids):
+                    continue
                 bar = token[bar_field_index]
                 if bar != current_bar:
-                    for _ in range(current_bar, bar):
-                        bar_spans.append([last_index, index])
+                    bar_spans += [[last_index, index]] * (bar - current_bar)
                     current_bar = bar
                     last_index = index
             bar_spans.append([last_index, len(token_ids)])
@@ -261,6 +275,9 @@ class MIDITokenizer:
         pitch_shift = np.random.randint(-shift_range, shift_range + 1)
         pitch_field_index = self.field_indices["pitch"]
 
+        # Only adjust actual tokens between <BOS> and <EOS> tokens
+        assert np.all(token_ids[0] == self.bos_token_ids) and np.all(token_ids[-1] == self.eos_token_ids)
+        token_ids = token_ids[1:-1]
         token_ids[:, pitch_field_index] += pitch_shift
         # Adjust the positions that are out of range
         too_low_mask = token_ids[:, pitch_field_index] < 0
@@ -293,10 +310,14 @@ if __name__ == "__main__":
     print("vocab_sizes:", tokenizer.vocab_sizes)
     print("encoder:", tokenizer.encoder)
     midi = MidiFile("test.mid")
-    tokens, bar_spans = tokenizer.encode(midi, return_bar_spans=True, include_empty_bar=True)
-    print(tokens)
-    new_tokens = tokenizer.encode(tokenizer.decode(tokens))
-    if np.all(tokens == new_tokens):
+    token_ids, bar_spans = tokenizer.encode(midi, return_bar_spans=True, include_empty_bar=False)
+
+    tokens = tokenizer.convert_ids_to_tokens(token_ids)
+    for token in tokens:
+        print(token)
+
+    new_token_ids = tokenizer.encode(tokenizer.decode(token_ids))
+    if np.all(token_ids == new_token_ids):
         print("Encode and decode are consistent.")
     else:
         print("Encode and decode are inconsistent!")

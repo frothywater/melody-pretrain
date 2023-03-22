@@ -304,7 +304,10 @@ class MelodyCompletionModel(MelodyModel):
         self.temperature = temperature
         self.top_k = top_k
         self.max_length = max_length
+        self.bar_field_index = self.tokenizer.field_indices["bar"]
         self.attention_mask = torch.triu(torch.ones((max_length, max_length), dtype=torch.bool), diagonal=1)
+        self.bos_token_tensor = torch.tensor(self.tokenizer.bos_token_ids, dtype=torch.long)
+        self.eos_token_tensor = torch.tensor(self.tokenizer.eos_token_ids, dtype=torch.long)
 
     def forward(self, input_ids: torch.Tensor, attn_mask: torch.Tensor) -> List[torch.Tensor]:
         x = self.fuser(input_ids)
@@ -315,21 +318,26 @@ class MelodyCompletionModel(MelodyModel):
         input_ids = batch.input_ids
         batch_size, _, _ = input_ids.shape
         assert batch_size == 1, "Only support batch size of 1 for prediction for now"
+        if self.attention_mask.device != self.device:
+            self.attention_mask = self.attention_mask.to(self.device)
+            self.bos_token_tensor = self.bos_token_tensor.to(self.device)
+            self.eos_token_tensor = self.eos_token_tensor.to(self.device)
 
-        # Crop the input to the conditional bar length
-        bar_field_index = self.tokenizer.field_indices["bar"]
-        conditional_bar_token_id = self.tokenizer.encoder["bar"][self.conditional_bar_length]
         prediction_bar_token_id = self.tokenizer.encoder["bar"][self.prediction_bar_length]
+        if self.conditional_bar_length > 0:
+            # Crop the input to the conditional bar length
+            conditional_bar_token_id = self.tokenizer.encoder["bar"][self.conditional_bar_length]
 
-        conditional_bar_test = (input_ids[0, :, bar_field_index] >= conditional_bar_token_id).nonzero()
-        assert len(conditional_bar_test) > 0, "No conditional bar token found in the input"
-        conditional_bar_index = conditional_bar_test[0, 0].item()
-        input_ids = input_ids[:, :conditional_bar_index, :]
+            conditional_bar_test = (input_ids[0, :, self.bar_field_index] >= conditional_bar_token_id).nonzero()
+            assert len(conditional_bar_test) > 0, "No conditional bar token found in the input"
+            conditional_bar_index = conditional_bar_test[0, 0].item()
+            input_ids = input_ids[:, :conditional_bar_index, :]
+        else:
+            input_ids = self.bos_token_tensor.view(1, 1, -1)
 
         # Inference on a single sequence
         while input_ids.shape[1] < self.max_length:
             seq_len = input_ids.shape[1]
-            self.attention_mask = self.attention_mask.to(input_ids.device)
             attention_mask = self.attention_mask[:seq_len, :seq_len]
 
             logits = self(input_ids, attention_mask)
@@ -343,8 +351,10 @@ class MelodyCompletionModel(MelodyModel):
             # token = self.tokenizer.convert_id_to_token(sampled_tokens.cpu().numpy())
             # print(token)
 
-            # until the desired bar length is reached
-            if sampled_tokens[bar_field_index] >= prediction_bar_token_id:
+            # until <EOS> token or the desired bar length is reached
+            if torch.any(sampled_tokens == self.eos_token_tensor) or (
+                sampled_tokens[self.bar_field_index] >= prediction_bar_token_id
+            ):
                 break
 
             # Append the sampled token to the input

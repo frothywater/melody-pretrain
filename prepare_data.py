@@ -12,6 +12,13 @@ from tqdm import tqdm
 from melody_pretrain.ngram import get_ngram_labels
 from melody_pretrain.tokenizer import MIDITokenizer
 
+def adapt_for_special_tokens_(ngrams: np.ndarray, num_tokens: int):
+    # offset by 1 because of <BOS> token
+    ngrams += 1
+    # move any ngrams on the front backward to the <BOS> token
+    ngrams[ngrams[:, 0] == 1] = 0
+    # move any ngrams on the end forward to the <EOS> token
+    ngrams[ngrams[:, 1] == num_tokens - 1] = num_tokens
 
 def prepare_data_job(
     midi_file: str,
@@ -30,9 +37,16 @@ def prepare_data_job(
         pitch_ngrams, rhythm_ngrams = get_ngram_labels(midi_file, lexicon_path)
         results["pitch_ngrams"] = pitch_ngrams
         results["rhythm_ngrams"] = rhythm_ngrams
+        # take care of <BOS> token
+        if np.all(data[0] == tokenizer.bos_token_ids):
+            adapt_for_special_tokens_(results["pitch_ngrams"], len(data))
+            adapt_for_special_tokens_(results["rhythm_ngrams"], len(data))
 
     if skeleton_note_indices is not None:
         results["skeleton_note_indices"] = skeleton_note_indices
+        # take care of <BOS> token
+        if np.all(data[0] == tokenizer.bos_token_ids):
+            results["skeleton_note_indices"] += 1
 
     os.makedirs(os.path.dirname(dest_path), exist_ok=True)
     np.savez(dest_path, **results)
