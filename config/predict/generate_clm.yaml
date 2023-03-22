@@ -12,7 +12,7 @@ model:
   class_path: MelodyCompletionModel
   init_args:
     dataset_dir: experiment/dataset/wikifonia
-    conditional_bar_length: 4
+    conditional_bar_length: 0
     prediction_bar_length: 32
     temperature: 0.9
     top_k: 10
