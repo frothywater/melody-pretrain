@@ -1240,11 +1240,11 @@ class DataCollatorForRecovery(DataCollator):
             target_labels[:, field_padding_indices] = self.tokenizer.pad_token_ids[field_padding_indices]
         else:
             target_labels = target
-        input = np.concatenate([source, [self.tokenizer.sep_token_ids], target[:-1]], axis=0)
+        input = np.concatenate([source, [self.tokenizer.sep_token_ids], target], axis=0)
         label = np.concatenate(
             [
                 np.full_like(source, self.tokenizer.pad_token_ids),
-                target_labels[1:],
+                target_labels,
                 [self.tokenizer.sep_token_ids],
             ],
             axis=0,
