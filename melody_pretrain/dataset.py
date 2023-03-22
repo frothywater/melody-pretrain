@@ -174,7 +174,7 @@ class Masking:
 class InfillingMasking(Masking):
     def mask_for_infilling(self, data: np.ndarray, **kwargs) -> InfillingData:
         raise NotImplementedError
-    
+
     def get_estimated_infilling_seq_length(self, seq_len: int) -> int:
         num_noise_tokens = int(round(seq_len * self.corruption_rate))
         num_noise_tokens = min(max(num_noise_tokens, 1), seq_len - 1)
@@ -270,7 +270,7 @@ class RandomTokenMasking(Masking):
 
 class SingleSpanMasking(InfillingMasking):
     need_to_mask_per_data = True
-    
+
     def __init__(self, corruption_rate: float = 0.5):
         super().__init__()
         self.corruption_rate = corruption_rate
@@ -746,6 +746,10 @@ class RandomNgramMasking(InfillingMasking):
                 num_span += 1
             else:
                 raise RuntimeError("ngrams are overlapping")
+        # Add the last span
+        previous_end = noise_ngram_spans[-1, 0] + noise_ngram_spans[-1, 1]
+        if previous_end < seq_len:
+            sources.append(data[previous_end:])
 
         # field padding indices
         field_padding_indices = (
