@@ -36,10 +36,10 @@ class InfillingData(NamedTuple):
     Allow extra data to be attached to the data pair.
     """
 
-    sources: List[np.ndarray]
-    targets: List[np.ndarray]
+    nonnoise_spans: List[np.ndarray]
+    noise_spans: List[np.ndarray]
     # Indicated that indices that the target spans will be after combined
-    target_span_indices: List[int]
+    noise_span_indices: List[int]
 
     # Used for explicit ngram prediction
     ngram_type: Optional[str] = None
@@ -175,13 +175,15 @@ class InfillingMasking(Masking):
     def mask_for_infilling(self, data: np.ndarray, **kwargs) -> InfillingData:
         raise NotImplementedError
 
-    def get_estimated_infilling_seq_length(self, seq_len: int) -> int:
+    def get_estimated_num_noise_spans(self, seq_len: int) -> int:
         num_noise_tokens = int(round(seq_len * self.corruption_rate))
         num_noise_tokens = min(max(num_noise_tokens, 1), seq_len - 1)
         mean_span_length = getattr(self, "mean_span_length", 3)
-        num_noise_spans = int(round(num_noise_tokens / mean_span_length))
+        return int(round(num_noise_tokens / mean_span_length))
+
+    def get_estimated_infilling_seq_length(self, seq_len: int) -> int:
         # ([MASK] + <SEP>) per noise span, with some extra space
-        return seq_len + 2 * (num_noise_spans + 5)
+        return seq_len + 2 * (self.get_estimated_num_noise_spans(seq_len) + 5)
 
     def get_estimated_recovery_seq_length(self, seq_len: int) -> int:
         num_noise_tokens = int(round(seq_len * self.corruption_rate))
@@ -218,6 +220,9 @@ class MultiTargetInfillingMasking(InfillingMasking):
         index = np.random.choice(len(self.maskings), p=self.probabilities)
         masking = self.maskings[index]
         return masking.mask_for_infilling(data, **kwargs)
+
+    def get_estimated_num_noise_spans(self, seq_len: int) -> int:
+        return max(masking.get_estimated_num_noise_spans(seq_len) for masking in self.maskings)
 
     def get_estimated_infilling_seq_length(self, seq_len: int) -> int:
         return max(masking.get_estimated_infilling_seq_length(seq_len) for masking in self.maskings)
@@ -289,11 +294,14 @@ class SingleSpanMasking(InfillingMasking):
         """
         seq_len, _ = data.shape
         start, end = self._get_random_span(seq_len)
-        sources = [data[:start], data[end:]]
-        targets = [data[start:end]]
-        # target span index is always 1, since the sequence is {source, target, source}
-        target_span_indices = [1]
-        return InfillingData(sources, targets, target_span_indices, is_long_mask=True)
+        nonnoise_spans = [data[:start], data[end:]]
+        noise_spans = [data[start:end]]
+        # target span index is always 1, since the sequence is {nonnoise, noise, nonnoise}
+        noise_span_indices = [1]
+        return InfillingData(nonnoise_spans, noise_spans, noise_span_indices, is_long_mask=True)
+
+    def get_estimated_num_noise_spans(self, seq_len: int) -> int:
+        return 1
 
     def get_estimated_infilling_seq_length(self, seq_len: int) -> int:
         # [MASK] + <SEP>
@@ -368,17 +376,17 @@ class RandomSpanMasking(InfillingMasking):
         seq_len, _ = data.shape
         spans = self._get_random_spans(seq_len)
         # Collect masked data and target data. Maybe there is a better way to do this.
-        sources, targets = [], []
-        target_span_indices = []
+        nonnoise_spans, noise_spans = [], []
+        noise_span_indices = []
         for i, (start, end) in enumerate(spans):
             if i % 2 == 0:
                 # non-noise span
-                sources.append(data[start:end])
+                nonnoise_spans.append(data[start:end])
             else:
                 # noise span
-                targets.append(data[start:end])
-                target_span_indices.append(i)
-        return InfillingData(sources, targets, target_span_indices)
+                noise_spans.append(data[start:end])
+                noise_span_indices.append(i)
+        return InfillingData(nonnoise_spans, noise_spans, noise_span_indices)
 
 
 class RandomBarMasking(InfillingMasking):
@@ -451,20 +459,17 @@ class RandomBarMasking(InfillingMasking):
         bar_spans = self._process_bar_spans(bar_spans, offset, offset + seq_len)
         noise_bars = self._get_random_noise_bars(bar_spans, seq_len)
 
-        sources, targets = [], []
-        target_span_indices = []
+        nonnoise_spans, noise_spans = [], []
+        noise_span_indices = []
         for i, (start, end) in enumerate(bar_spans):
             if noise_bars[i]:
                 # noise bar
-                targets.append(data[start:end])
-                target_span_indices.append(i)
+                noise_spans.append(data[start:end])
+                noise_span_indices.append(i)
             else:
                 # non-noise bar
-                sources.append(data[start:end])
-        return InfillingData(sources, targets, target_span_indices)
-
-    def get_estimated_infilling_seq_length(self, seq_len: int) -> int:
-        return super().get_estimated_infilling_seq_length(seq_len) + 30
+                nonnoise_spans.append(data[start:end])
+        return InfillingData(nonnoise_spans, noise_spans, noise_span_indices)
 
 
 class RandomSkeletonUnitMasking(InfillingMasking):
@@ -523,20 +528,20 @@ class RandomSkeletonUnitMasking(InfillingMasking):
         unit_spans = self._get_unit_spans(note_indices, offset, offset + seq_len)
         noise_units = self._get_random_noise_units(unit_spans, seq_len)
 
-        sources, targets = [], []
-        target_span_indices = []
+        nonnoise_spans, noise_spans = [], []
+        noise_span_indices = []
         for i, (start, end) in enumerate(unit_spans):
             if noise_units[i]:
                 # noise unit
-                targets.append(data[start:end])
-                target_span_indices.append(i)
+                noise_spans.append(data[start:end])
+                noise_span_indices.append(i)
             else:
                 # non-noise unit
-                sources.append(data[start:end])
+                nonnoise_spans.append(data[start:end])
         return InfillingData(
-            sources,
-            targets,
-            target_span_indices,
+            nonnoise_spans,
+            noise_spans,
+            noise_span_indices,
             field_padding_indices=self.rhythm_padding_indices if self.rhythm_specific_masking else None,
         )
 
@@ -592,11 +597,14 @@ class FixedBarMasking(InfillingMasking):
         past = data[past_start:past_end]
         future = data[future_start:future_end]
         middle = data[past_end:future_start]
-        sources = [past, future]
-        targets = [middle]
+        nonnoise_spans = [past, future]
+        noise_spans = [middle]
         # target span index is always 1, since the sequence is {past, middle, future}
-        target_span_indices = [1]
-        return InfillingData(sources, targets, target_span_indices, is_long_mask=True)
+        noise_span_indices = [1]
+        return InfillingData(nonnoise_spans, noise_spans, noise_span_indices, is_long_mask=True)
+
+    def get_estimated_num_noise_spans(self, seq_len: int) -> int:
+        return 1
 
     def get_estimated_infilling_seq_length(self, seq_len: int) -> int:
         # [MASK] + <SEP>
@@ -604,7 +612,7 @@ class FixedBarMasking(InfillingMasking):
 
     def get_estimated_recovery_seq_length(self, seq_len: int) -> int:
         # corrupted part + <SEP> + original part + (some extra space)
-        return (seq_len - self.num_middle_bars * 3) + 1 + seq_len + 5
+        return (seq_len - self.num_middle_bars * 2) + 1 + seq_len + 5
 
 
 class RandomNgramMasking(InfillingMasking):
@@ -726,22 +734,22 @@ class RandomNgramMasking(InfillingMasking):
         noise_ngram_spans = noise_ngram_spans[np.argsort(noise_ngram_spans[:, 0])]
 
         # Build masked data and target
-        sources, targets = [], []
-        target_span_indices = []
+        nonnoise_spans, noise_spans = [], []
+        noise_span_indices = []
         ngram_ids = []
         num_span = 0
         for i, (start, length, ngram_id) in enumerate(noise_ngram_spans):
             previous_end = noise_ngram_spans[i - 1, 0] + noise_ngram_spans[i - 1, 1] if i > 0 else 0
             if start > previous_end:
-                sources.append(data[previous_end:start])
-                targets.append(data[start : start + length])
-                target_span_indices.append(num_span + 1)
+                nonnoise_spans.append(data[previous_end:start])
+                noise_spans.append(data[start : start + length])
+                noise_span_indices.append(num_span + 1)
                 ngram_ids.append(ngram_id)
                 num_span += 2
             elif start == previous_end:
                 # this ngram is adjacent to the previous one
-                targets.append(data[start : start + length])
-                target_span_indices.append(num_span)
+                noise_spans.append(data[start : start + length])
+                noise_span_indices.append(num_span)
                 ngram_ids.append(ngram_id)
                 num_span += 1
             else:
@@ -749,7 +757,7 @@ class RandomNgramMasking(InfillingMasking):
         # Add the last span
         previous_end = noise_ngram_spans[-1, 0] + noise_ngram_spans[-1, 1]
         if previous_end < seq_len:
-            sources.append(data[previous_end:])
+            nonnoise_spans.append(data[previous_end:])
 
         # field padding indices
         field_padding_indices = (
@@ -759,9 +767,9 @@ class RandomNgramMasking(InfillingMasking):
         )
 
         return InfillingData(
-            sources,
-            targets,
-            target_span_indices,
+            nonnoise_spans,
+            noise_spans,
+            noise_span_indices,
             ngram_type=self.ngram_type,
             ngram_ids=ngram_ids,
             field_padding_indices=field_padding_indices,
@@ -869,7 +877,7 @@ class DataCollatorForFixedInfilling(DataCollator):
         # Only collect masked data
         masked_data_list = []
         for data, extra_data in zip(data_list, extra_data_list):
-            sources = self.masking.mask_for_infilling(data, **extra_data).sources
+            sources = self.masking.mask_for_infilling(data, **extra_data).nonnoise_spans
             assert len(sources) == 2, "Fixed bar masking should generate past and future spans."
             masked_data = np.concatenate([sources[0], [self.tokenizer.long_mask_token_ids], sources[1]], axis=0)
             masked_data_list.append(masked_data)
@@ -969,37 +977,37 @@ class DataCollatorForInfilling(DataCollator):
 
     def _get_source_and_target(
         self,
-        sources: List[np.ndarray],
-        targets: List[np.ndarray],
-        target_span_indices: List[int],
+        nonnoise_spans: List[np.ndarray],
+        noise_spans: List[np.ndarray],
+        noise_span_indices: List[int],
         permutated: bool,
         is_long_mask: bool,
     ) -> Tuple[np.ndarray, np.ndarray, List[int], List[int], List[int]]:
-        assert len(target_span_indices) == len(targets)
-        assert target_span_indices == sorted(target_span_indices)
+        assert len(noise_span_indices) == len(noise_spans)
+        assert noise_span_indices == sorted(noise_span_indices)
 
         source_list, target_list = [], []
-        current_source, current_target = 0, 0
+        current_nonnoise, current_noise = 0, 0
         mask_positions, sep_positions, target_span_lengths = [], [], []
         current_source_position = 0
-        for span_index in range(len(sources) + len(targets)):
-            if current_target < len(targets) and span_index == target_span_indices[current_target]:
+        for span_index in range(len(nonnoise_spans) + len(noise_spans)):
+            if current_noise < len(noise_spans) and span_index == noise_span_indices[current_noise]:
                 if is_long_mask:
                     source_list.append([self.tokenizer.long_mask_token_ids])
                 else:
                     source_list.append([self.tokenizer.mask_token_ids])
-                target_list.append(np.concatenate(([self.tokenizer.sep_token_ids], targets[current_target]), axis=0))
+                target_list.append(np.concatenate(([self.tokenizer.sep_token_ids], noise_spans[current_noise]), axis=0))
                 mask_positions.append(current_source_position)
                 current_source_position += 1
-                current_target += 1
+                current_noise += 1
             else:
-                source_list.append(sources[current_source])
-                current_source_position += len(sources[current_source])
-                current_source += 1
-        assert current_source == len(sources) and current_target == len(targets)
+                source_list.append(nonnoise_spans[current_nonnoise])
+                current_source_position += len(nonnoise_spans[current_nonnoise])
+                current_nonnoise += 1
+        assert current_nonnoise == len(nonnoise_spans) and current_noise == len(noise_spans)
 
-        if permutated and len(targets) > 1:
-            permutation = np.random.permutation(len(targets))
+        if permutated and len(noise_spans) > 1:
+            permutation = np.random.permutation(len(noise_spans))
             target_list = [target_list[i] for i in permutation]
 
         source = np.concatenate(source_list, axis=0)
@@ -1007,7 +1015,7 @@ class DataCollatorForInfilling(DataCollator):
         target_span_lengths = [len(target) for target in target_list]
         sep_positions = [0] + np.cumsum(target_span_lengths)[:-1].tolist()
 
-        if permutated and len(targets) > 1:
+        if permutated and len(noise_spans) > 1:
             # reorder sep positions back to original, so that sep postitions are corresponding to mask positions
             sep_positions = [sep_positions[i] for i in np.argsort(permutation)]
 
@@ -1107,9 +1115,9 @@ class DataCollatorForInfilling(DataCollator):
             infilling_data = self.masking.mask_for_infilling(data, offset=offset, **extra_data)
 
             source, target, mask_positions, sep_positions, target_span_lengths = self._get_source_and_target(
-                infilling_data.sources,
-                infilling_data.targets,
-                target_span_indices=infilling_data.target_span_indices,
+                infilling_data.nonnoise_spans,
+                infilling_data.noise_spans,
+                noise_span_indices=infilling_data.noise_span_indices,
                 permutated=self.permutated_infilling,
                 is_long_mask=infilling_data.is_long_mask,
             )
@@ -1203,37 +1211,78 @@ class DataCollatorForRecovery(DataCollator):
         masking: InfillingMasking,
         seq_len: int,
         random_crop: bool = False,
+        random_mask_ratio: float = 0,
+        random_replace_ratio: float = 0,
     ):
         super().__init__(seq_len, random_crop)
         self.masking = masking
-        self.whole_seq_length = masking.get_estimated_recovery_seq_length(seq_len)
+
+        assert 0 <= random_mask_ratio <= 1 and 0 <= random_replace_ratio <= 1
+        self.random_mask_ratio = random_mask_ratio
+        self.random_replace_ratio = random_replace_ratio
+        self.random_delete_ratio = 1 - random_mask_ratio - random_replace_ratio
+
+        self.whole_seq_length = round(
+            self.random_delete_ratio * masking.get_estimated_recovery_seq_length(seq_len)
+            + self.random_mask_ratio * masking.get_estimated_recovery_seq_length(seq_len)
+            + self.random_replace_ratio * (seq_len * 2 + 1)
+        )
 
     def setup_tokenizer(self, tokenizer: MIDITokenizer):
         super().setup_tokenizer(tokenizer)
         self.masking.setup_tokenizer(tokenizer)
 
+    def _get_random_noise_method(self) -> str:
+        return np.random.choice(
+            ["mask", "replace", "delete"],
+            p=[self.random_mask_ratio, self.random_replace_ratio, self.random_delete_ratio],
+        )
+
     def _get_source_and_target(
         self,
-        sources: List[np.ndarray],
-        targets: List[np.ndarray],
-        target_span_indices: List[int],
+        nonnoise_spans: List[np.ndarray],
+        noise_spans: List[np.ndarray],
+        noise_span_indices: List[int],
+        is_long_mask: bool,
     ) -> Tuple[np.ndarray, np.ndarray]:
-        assert target_span_indices == sorted(target_span_indices)
-        source_span_indices = [i for i in range(len(sources) + len(targets)) if i not in target_span_indices]
-        assert len(target_span_indices) == len(targets) and len(source_span_indices) == len(sources)
+        num_spans = len(nonnoise_spans) + len(noise_spans)
+        noise_span_indices = set(noise_span_indices)
+        nonnoise_span_indices = set(range(num_spans)) - noise_span_indices
+        assert len(noise_span_indices) == len(noise_spans) and len(nonnoise_span_indices) == len(nonnoise_spans)
 
-        all_spans = [None for _ in range(len(sources) + len(targets))]
-        for source, index in zip(sources, source_span_indices):
-            all_spans[index] = source
-        for target, index in zip(targets, target_span_indices):
-            all_spans[index] = target
+        # rearrange source and target spans into one array
+        spans = [None for _ in range(num_spans)]
+        for index, source in zip(nonnoise_span_indices, nonnoise_spans):
+            spans[index] = source
+        for index, target in zip(noise_span_indices, noise_spans):
+            spans[index] = target
 
-        if len(sources) > 0:
-            source = np.concatenate(sources, axis=0)
+        # create source and target
+        source_list, target_list = [], []
+        for i, span in enumerate(spans):
+            if i in nonnoise_span_indices:
+                source_list.append(span)
+                target_list.append(span)
+            else:
+                target_list.append(span)
+                # choose noise method: delete, mask or replace
+                noise_method = self._get_random_noise_method()
+                if noise_method == "delete":
+                    # delete noise span in source
+                    pass
+                elif noise_method == "mask":
+                    source_list.append(
+                        [self.tokenizer.long_mask_token_ids if is_long_mask else self.tokenizer.mask_token_ids]
+                    )
+                elif noise_method == "replace":
+                    raise NotImplementedError
+
+        if len(source_list) > 0:
+            source = np.concatenate(source_list, axis=0)
         else:
             # allow empty source, task turns into pure CLM
             source = np.empty((0, len(self.tokenizer.field_names)))
-        target = np.concatenate(all_spans, axis=0)
+        target = np.concatenate(target_list, axis=0)
         return source, target
 
     def _get_input_and_label(
@@ -1282,9 +1331,10 @@ class DataCollatorForRecovery(DataCollator):
             infilling_data = self.masking.mask_for_infilling(data, offset=offset, **extra_data)
 
             source, target = self._get_source_and_target(
-                infilling_data.sources,
-                infilling_data.targets,
-                infilling_data.target_span_indices,
+                infilling_data.nonnoise_spans,
+                infilling_data.noise_spans,
+                infilling_data.noise_span_indices,
+                is_long_mask=infilling_data.is_long_mask,
             )
             input, label = self._get_input_and_label(
                 source, target, field_padding_indices=infilling_data.field_padding_indices
@@ -1296,6 +1346,10 @@ class DataCollatorForRecovery(DataCollator):
             input_lengths.append(len(input))
 
         # pad
+        max_length = max(input_lengths)
+        if max_length > self.whole_seq_length:
+            print(f"adjusting whole_seq_length from {self.whole_seq_length} to {max_length}...")
+            self.whole_seq_length = max_length
         input_ids = torch.from_numpy(np.stack(self.pad(inputs, self.whole_seq_length), axis=0)).long()
         label_ids = torch.from_numpy(np.stack(self.pad(labels, self.whole_seq_length), axis=0)).long()
 

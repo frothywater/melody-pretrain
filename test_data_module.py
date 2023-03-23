@@ -36,9 +36,10 @@ if __name__ == "__main__":
         # FixedBarMasking(6, 4, 6),
         seq_len=128,
         random_crop=False,
+        random_mask_ratio=0.5,
     )
     data_module = MelodyPretrainDataModule(
-        dataset_dir="experiment/dataset/wikifonia",
+        dataset_dir="experiment/dataset/melodynet",
         batch_size=1,
         num_workers=0,
         load_ngram_data=True,
