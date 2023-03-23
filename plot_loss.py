@@ -1,11 +1,11 @@
 import os
 from argparse import ArgumentParser
 from glob import glob
-from matplotlib import pyplot as plt
 
 import numpy as np
 import pandas as pd
 import seaborn as sns
+from matplotlib import pyplot as plt
 
 sns.set(rc={"figure.dpi": 300, "savefig.dpi": 300})
 sns.set_style("ticks")
@@ -60,8 +60,9 @@ def save_figure(data: pd.DataFrame, dest_path: str, label_0="var_0", label_1="va
 
     task_sorted = sorted(data.task.unique())
     var_0_order = sorted(data[label_0].unique())
+    var_1_order = sorted(data[label_1].unique())
     g = sns.FacetGrid(data, col="task", hue=label_0, sharey=False, col_order=task_sorted, hue_order=var_0_order)
-    g.map(sns.lineplot, label_1, label_value)
+    g.map(sns.pointplot, label_1, label_value, order=var_1_order)
     g.add_legend()
     g.savefig(dest_path)
 
@@ -71,41 +72,14 @@ def main():
     parser.add_argument("--experiment_dir", type=str, required=False)
     args = parser.parse_args()
 
-    if args.experiment_dir is None:
-        return plot_combined()
-
-    figure_path = os.path.join(args.experiment_dir, "result", "data.png")
-    csv_path = os.path.join(args.experiment_dir, "result", "data.csv")
+    figure_path = os.path.join(args.experiment_dir, "result", "loss.png")
+    csv_path = os.path.join(args.experiment_dir, "result", "loss.csv")
     os.makedirs(os.path.dirname(figure_path), exist_ok=True)
 
     # data = pd.read_csv(csv_path)
     data = get_test_data(args.experiment_dir)
     data.to_csv(csv_path, index=False)
     save_figure(data, figure_path, label_0="model", label_1="rate", label_value="loss")
-
-
-def plot_combined():
-    df1 = pd.read_csv("experiment/ablation_infilling/result/data.csv")
-    df1["method"] = "infilling"
-    df2 = pd.read_csv("experiment/ablation_recovery/result/data.csv")
-    df2["method"] = "recovery"
-
-    df = pd.concat([df1, df2])
-    df.rename(columns={"var_0": "masking", "var_1": "rate", "value": "loss"}, inplace=True)
-    df.sort_values(by=["method", "task", "masking", "rate"], inplace=True)
-
-    fig, axs = plt.subplots(1, 2, figsize=(10, 5), sharey=False)
-    sns.lineplot(data=df[df.task == "finetune_clm"], x="rate", y="loss", hue="masking", style="method", ax=axs[0])
-    sns.lineplot(data=df[df.task == "finetune_infilling"], x="rate", y="loss", hue="masking", style="method", ax=axs[1])
-    axs[0].set_title("clm")
-    axs[1].set_title("infilling")
-
-    axs[0].get_legend().remove()
-    sns.move_legend(axs[1], "upper left", bbox_to_anchor=(1, 1))
-
-    fig.tight_layout()
-    fig.savefig("experiment/ablation.png")
-    df.to_csv("experiment/ablation.csv", index=False)
 
 
 if __name__ == "__main__":
