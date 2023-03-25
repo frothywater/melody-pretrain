@@ -12,13 +12,15 @@ from tqdm import tqdm
 from melody_pretrain.ngram import get_ngram_labels
 from melody_pretrain.tokenizer import MIDITokenizer
 
+
 def adapt_for_special_tokens_(ngrams: np.ndarray, num_tokens: int):
     # offset by 1 because of <BOS> token
     ngrams += 1
     # move any ngrams on the front backward to the <BOS> token
-    ngrams[ngrams[:, 0] == 1] = 0
+    ngrams[ngrams[:, 0] == 1, 0] = 0
     # move any ngrams on the end forward to the <EOS> token
-    ngrams[ngrams[:, 1] == num_tokens - 1] = num_tokens
+    ngrams[ngrams[:, 1] == num_tokens - 1, 1] = num_tokens
+
 
 def prepare_data_job(
     midi_file: str,
