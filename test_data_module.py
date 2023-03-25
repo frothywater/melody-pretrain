@@ -1,3 +1,4 @@
+import os
 import torch
 
 from melody_pretrain.dataset import (
@@ -15,25 +16,19 @@ from melody_pretrain.dataset import (
     RandomSpanMasking,
     SingleSpanMasking,
 )
-from melody_pretrain.ngram import get_lexicon_size
 from melody_pretrain.tokenizer import MIDITokenizer
 
-if __name__ == "__main__":
-    # debug
-    torch.set_printoptions(linewidth=1000)
-
-    tokenizer = MIDITokenizer()
-    print(tokenizer)
-
-    # pitch_size, rhythm_size = get_lexicon_size("experiment/dataset/melodynet/ngram_data/lexicon.pkl")
-    # print(f"pitch_size: {pitch_size}, rhythm_size: {rhythm_size}")
-
+def get_data_module(mask: str):
+    if mask == "span":
+        masking = RandomSpanMasking(corruption_rate=0.5)
+    elif mask == "bar":
+        masking = RandomBarMasking(corruption_rate=0.5)
+    elif mask == "single":
+        masking = SingleSpanMasking(corruption_rate=0.5)
+    elif mask == "ngram":
+        masking = RandomNgramMasking(corruption_rate=0.5, extra_data_field_name="pitch_ngrams")
     data_collator = DataCollatorForRecovery(
-        # RandomSpanMasking(corruption_rate=0.5),
-        # RandomBarMasking(corruption_rate=0.5),
-        # SingleSpanMasking(corruption_rate=0.5),
-        RandomNgramMasking(corruption_rate=0.5, extra_data_field_name="pitch_ngrams"),
-        # FixedBarMasking(6, 4, 6),
+        masking=masking,
         seq_len=128,
         random_crop=False,
         random_mask_ratio=0.5,
@@ -41,25 +36,39 @@ if __name__ == "__main__":
     data_module = MelodyPretrainDataModule(
         dataset_dir="experiment/dataset/melodynet",
         batch_size=1,
-        num_workers=0,
-        load_ngram_data=True,
-        load_bar_data=True,
+        load_ngram_data=mask == "ngram",
+        load_bar_data=mask == "bar",
+        debug=True,
     )
     data_module.register_task("train", data_collator)
     data_module.setup("train")
+    return data_module
 
-    def print_batch(batch: DataBatch):
-        print("filename:", batch.filenames[0])
+
+if __name__ == "__main__":
+    torch.set_printoptions(linewidth=1000)
+    tokenizer = MIDITokenizer()
+    print(tokenizer)
+
+    def print_batch(batch: DataBatch, file=None):
+        print("filename:", batch.filenames[0], file=file)
         input_tokens = tokenizer.convert_ids_to_tokens(batch.input_ids.squeeze(0).numpy())
         label_tokens = tokenizer.convert_ids_to_tokens(batch.label_ids.squeeze(0).numpy())
         for input_token, label_token in zip(input_tokens, label_tokens):
-            print(input_token, "->", label_token)
+            print(input_token, "->", label_token, file=file)
         # print("attention_mask:")
-        # print(batch.attention_mask)
+        # print(batch.attention_mask, file=file)
         # print("padding_mask:")
-        # print(batch.padding_mask)
+        # print(batch.padding_mask, file=file)
 
-    for i, batch in enumerate(data_module.train_dataloader()):
-        if i > 10:
-            break
-        print_batch(batch)
+    maskings = ["span", "bar", "single", "ngram"]
+    for mask in maskings:
+        print(f"masking: {mask}")
+        data_module = get_data_module(mask)
+        log_file = f"experiment/test/{mask}.txt"
+        os.makedirs(os.path.dirname(log_file), exist_ok=True)
+        with open(log_file, "w") as f:
+            for i, batch in enumerate(data_module.train_dataloader()):
+                if i > 100:
+                    break
+                print_batch(batch, file=f)

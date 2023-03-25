@@ -1211,7 +1211,7 @@ class DataCollatorForRecovery(DataCollator):
         masking: InfillingMasking,
         seq_len: int,
         random_crop: bool = False,
-        random_mask_ratio: float = 0,
+        random_mask_ratio: float = 0.15,
         random_replace_ratio: float = 0,
     ):
         super().__init__(seq_len, random_crop)
@@ -1223,8 +1223,8 @@ class DataCollatorForRecovery(DataCollator):
         self.random_delete_ratio = 1 - random_mask_ratio - random_replace_ratio
 
         self.whole_seq_length = round(
-            self.random_delete_ratio * masking.get_estimated_recovery_seq_length(seq_len)
-            + self.random_mask_ratio * masking.get_estimated_recovery_seq_length(seq_len)
+            (self.random_delete_ratio + self.random_mask_ratio) * masking.get_estimated_recovery_seq_length(seq_len)
+            + self.random_mask_ratio * masking.get_estimated_num_noise_spans(seq_len)
             + self.random_replace_ratio * (seq_len * 2 + 1)
         )
 
@@ -1246,16 +1246,17 @@ class DataCollatorForRecovery(DataCollator):
         is_long_mask: bool,
     ) -> Tuple[np.ndarray, np.ndarray]:
         num_spans = len(nonnoise_spans) + len(noise_spans)
-        noise_span_indices = set(noise_span_indices)
-        nonnoise_span_indices = set(range(num_spans)) - noise_span_indices
+        noise_span_indices = sorted(noise_span_indices)
+        nonnoise_span_indices = set(range(num_spans)) - set(noise_span_indices)
+        nonnoise_span_indices = sorted(nonnoise_span_indices)
         assert len(noise_span_indices) == len(noise_spans) and len(nonnoise_span_indices) == len(nonnoise_spans)
 
         # rearrange source and target spans into one array
         spans = [None for _ in range(num_spans)]
-        for index, source in zip(nonnoise_span_indices, nonnoise_spans):
-            spans[index] = source
-        for index, target in zip(noise_span_indices, noise_spans):
-            spans[index] = target
+        for index, nonnoise_span in zip(nonnoise_span_indices, nonnoise_spans):
+            spans[index] = nonnoise_span
+        for index, noise_span in zip(noise_span_indices, noise_spans):
+            spans[index] = noise_span
 
         # create source and target
         source_list, target_list = [], []
@@ -1418,6 +1419,7 @@ class MelodyPretrainDataModule(pl.LightningDataModule):
         load_skeleton_data: bool = False,
         pitch_augumentation: bool = True,
         times_to_predict: int = 1,
+        debug: bool = False,
     ):
         super().__init__()
         self.dataset_dir = dataset_dir
@@ -1433,6 +1435,7 @@ class MelodyPretrainDataModule(pl.LightningDataModule):
         self.load_skeleton_data = load_skeleton_data
         self.pitch_augumentation = pitch_augumentation
         self.times_to_predict = times_to_predict
+        self.debug = debug
 
         self.data_collators: Dict[str, DataCollator] = {}
 
@@ -1452,11 +1455,11 @@ class MelodyPretrainDataModule(pl.LightningDataModule):
         return DataLoader(
             self.datasets[split_name],
             batch_size=self.batch_size if split_name != "predict" else 1,
-            shuffle=split_name == "train",
+            shuffle=split_name == "train" and not self.debug,
             drop_last=split_name == "train",
             collate_fn=collator,
-            num_workers=self.num_workers,
-            pin_memory=True,
+            num_workers=self.num_workers if not self.debug else 0,
+            pin_memory=True and not self.debug,
         )
 
     def _make_data_loaders(self, split_name: str):
