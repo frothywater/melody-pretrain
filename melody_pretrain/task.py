@@ -307,6 +307,8 @@ class RecoveryTask(TrainingTask):
         seq_len: int = 256,
         random_crop: bool = True,
         field_specific_masking: bool = False,
+        random_mask_ratio: float = 0,
+        random_replace_ratio: float = 0,
     ):
         super().__init__(f"{kind}_{task_name}", weight)
         self.kinds = kind if isinstance(kind, list) else [kind]
@@ -316,6 +318,8 @@ class RecoveryTask(TrainingTask):
         self.seq_len = seq_len
         self.random_crop = random_crop
         self.field_specific_masking = field_specific_masking
+        self.random_mask_ratio = random_mask_ratio
+        self.random_replace_ratio = random_replace_ratio
 
     def get_data_collator(self) -> DataCollator:
         masking = get_masking(
@@ -330,6 +334,8 @@ class RecoveryTask(TrainingTask):
             masking=masking,
             seq_len=self.seq_len,
             random_crop=self.random_crop,
+            random_mask_ratio=self.random_mask_ratio,
+            random_replace_ratio=self.random_replace_ratio,
         )
 
     def __call__(self, model, batch: DataBatch, **kwargs) -> torch.Tensor:

@@ -189,7 +189,7 @@ class InfillingMasking(Masking):
         num_noise_tokens = int(round(seq_len * self.corruption_rate))
         num_noise_tokens = min(max(num_noise_tokens, 1), seq_len - 1)
         # corrupted part + <SEP> + original part + (some extra space)
-        return (seq_len - num_noise_tokens) + 1 + seq_len + 5
+        return (seq_len - num_noise_tokens) + 1 + seq_len + 10
 
 
 class MultiTargetInfillingMasking(InfillingMasking):
@@ -1211,7 +1211,7 @@ class DataCollatorForRecovery(DataCollator):
         masking: InfillingMasking,
         seq_len: int,
         random_crop: bool = False,
-        random_mask_ratio: float = 0.15,
+        random_mask_ratio: float = 0,
         random_replace_ratio: float = 0,
     ):
         super().__init__(seq_len, random_crop)
