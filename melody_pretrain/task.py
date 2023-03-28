@@ -223,16 +223,6 @@ class RewritingTask(TrainingTask):
             self.sep_token_tensor = self.sep_token_tensor.to(device)
             self.pad_token_tensor = self.pad_token_tensor.to(device)
 
-    def _get_attention_mask(self, source_length: int, seq_len: int, device: torch.device) -> torch.Tensor:
-        target_length = seq_len - source_length
-        left_prefix_part = torch.zeros((seq_len, source_length), dtype=torch.bool, device=device)
-        top_right_target_part = torch.ones((source_length, target_length), dtype=torch.bool, device=device)
-        bottom_right_target_part = torch.triu(
-            torch.ones((target_length, target_length), dtype=torch.bool, device=device), diagonal=1
-        )
-        right_target_part = torch.cat([top_right_target_part, bottom_right_target_part], dim=0)
-        return torch.cat([left_prefix_part, right_target_part], dim=1)
-
     def __call__(self, model, batch: DataBatch, **kwargs) -> torch.Tensor:
         batch_size, _, num_features = batch.input_ids.shape
         self._move_tensors(model.device)
@@ -275,15 +265,7 @@ class RewritingTask(TrainingTask):
         label_ids = torch.stack(
             [torch.cat([label, self.pad_token_tensor.repeat(self.whole_seq_len - len(label), 1)]) for label in labels]
         )
-        padding_mask = (
-            torch.arange(self.whole_seq_len, device=model.device)[None, :]
-            >= torch.tensor(input_lengths, device=model.device)[:, None]
-        )
-        # attention mask
-        attention_mask = torch.stack(
-            [self._get_attention_mask(length, self.whole_seq_len, model.device) for length in source_lengths]
-        )
-        new_batch = DataBatch(input_ids, label_ids, padding_mask, attention_mask)
+        new_batch = DataBatch(input_ids, label_ids, attention_kind="prefix", lengths=input_lengths, source_lengths=source_lengths)
 
         # 4. Feed prefixed data (fake + real) to the original model for seq2seq task
         x = model(new_batch)

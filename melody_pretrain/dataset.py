@@ -1,6 +1,6 @@
 import os
 from glob import glob
-from typing import Dict, List, NamedTuple, Optional, Tuple
+from typing import Dict, List, Literal, NamedTuple, Optional, Tuple, Union
 
 import lightning as pl
 import numpy as np
@@ -11,6 +11,8 @@ from .tokenizer import MIDITokenizer
 
 ngram_ids_ignore_index = -100
 span_indices_padding_index = 0
+
+AttentionKind = Union[Literal["full"], Literal["causal"], Literal["prefix"]]
 
 
 class DatasetItem(NamedTuple):
@@ -57,11 +59,15 @@ class DataBatch(NamedTuple):
     Note that in PyTorch's padding mask and attention mask, True means to ignore."""
 
     input_ids: torch.Tensor
-    label_ids: torch.Tensor
-    padding_mask: torch.Tensor
-    attention_mask: Optional[torch.Tensor] = None
+    label_ids: Optional[torch.Tensor] = None
 
+    attention_kind: AttentionKind = "full"
+
+    # Whole sequence length for CLM/MLM or infilling/recovery
     lengths: Optional[List[int]] = None
+    # Prefix length for infilling/recovery
+    source_lengths: Optional[List[int]] = None
+
     filenames: Optional[List[str]] = None
 
     # Used for explicit ngram prediction
@@ -851,11 +857,9 @@ class DataCollatorForPaddingOnly(DataCollator):
         data_list, _ = self.truncate(data_list, self.seq_len)
         input_ids = np.stack(self.pad(data_list, self.seq_len), axis=0)
         input_ids = torch.from_numpy(input_ids).long()
-        padding_mask = torch.tensor(
-            [[0] * len(data) + [1] * (self.seq_len - len(data)) for data in data_list], dtype=torch.bool
-        )
+        lengths = [len(data) for data in data_list]
 
-        return DataBatch(input_ids, label_ids=None, padding_mask=padding_mask, filenames=filenames)
+        return DataBatch(input_ids, label_ids=None, attention_kind="causal", lengths=lengths, filenames=filenames)
 
 
 class DataCollatorForFixedInfilling(DataCollator):
@@ -883,18 +887,14 @@ class DataCollatorForFixedInfilling(DataCollator):
             masked_data_list.append(masked_data)
         input_ids = np.stack(self.pad(masked_data_list, self.seq_len), axis=0)
         input_ids = torch.from_numpy(input_ids).long()
-        padding_mask = torch.tensor(
-            [[0] * len(data) + [1] * (self.seq_len - len(masked_data)) for masked_data in masked_data_list],
-            dtype=torch.bool,
-        )
+        lengths = [len(data) for data in masked_data_list]
 
-        return DataBatch(input_ids, label_ids=None, padding_mask=padding_mask, filenames=filenames)
+        return DataBatch(input_ids, label_ids=None, lengths=lengths, filenames=filenames)
 
 
 class DataCollatorForCausalLanguageModeling(DataCollator):
     def __init__(self, seq_len: int, random_crop: bool = False):
         super().__init__(seq_len, random_crop)
-        self.attention_mask = torch.triu(torch.ones((self.seq_len, self.seq_len), dtype=torch.bool), diagonal=1)
 
     def __call__(self, batch: List[DatasetItem]) -> DataBatch:
         data_list = [item.data for item in batch]
@@ -905,12 +905,9 @@ class DataCollatorForCausalLanguageModeling(DataCollator):
         batched_data = np.stack(self.pad(data_list, self.seq_len + 1), axis=0)
         input_ids = torch.from_numpy(batched_data[:, :-1]).long()
         label_ids = torch.from_numpy(batched_data[:, 1:]).long()
+        lengths = [len(data) - 1 for data in data_list]
 
-        # causal attention mask
-        padding_mask = torch.zeros((len(batch), self.seq_len), dtype=torch.bool)
-        for i, data in enumerate(data_list):
-            padding_mask[i, len(data) - 1 :] = True
-        return DataBatch(input_ids, label_ids, padding_mask, self.attention_mask, filenames=filenames)
+        return DataBatch(input_ids, label_ids, attention_kind="causal", lengths=lengths, filenames=filenames)
 
 
 class DataCollatorForMaskedLanguageModeling(DataCollator):
@@ -946,11 +943,7 @@ class DataCollatorForMaskedLanguageModeling(DataCollator):
             extra_data = {k: [d[k] for d in extra_data_list] for k in extra_data_list[0]}
             input_ids, label_ids = self.masking.mask_batch(batch, lengths, offsets=offsets, **extra_data)
 
-        # bidirectional attention mask
-        padding_mask = torch.zeros((len(batch), self.seq_len), dtype=torch.bool)
-        for i, length in enumerate(lengths):
-            padding_mask[i, length:] = True
-        return DataBatch(input_ids, label_ids, padding_mask, lengths=lengths, filenames=filenames)
+        return DataBatch(input_ids, label_ids, attention_kind="full", lengths=lengths, filenames=filenames)
 
 
 class DataCollatorForInfilling(DataCollator):
@@ -1050,37 +1043,6 @@ class DataCollatorForInfilling(DataCollator):
         )
         return input, label
 
-    def _get_attention_mask(
-        self, source_length: int, seq_len: int, target_span_lengths: Optional[List[int]] = None
-    ) -> torch.Tensor:
-        # bidirectional attention mask for prefix sequence
-        left_prefix_part = torch.zeros((seq_len, source_length), dtype=torch.bool)
-
-        target_length = seq_len - source_length
-        top_right_target_part = torch.ones((source_length, target_length), dtype=torch.bool)
-
-        if target_span_lengths is not None:
-            # independent causal attention mask for each infilling sequence
-            assert (
-                sum(target_span_lengths) <= target_length
-            ), "sum of target span lengths must be less than target length"
-            bottom_right_target_part = torch.ones((target_length, target_length), dtype=torch.bool)
-            span_start = 0
-            for span_length in target_span_lengths:
-                span_end = span_start + span_length
-                bottom_right_target_part[span_start:span_end, span_start:span_end] = torch.triu(
-                    torch.ones((span_length, span_length), dtype=torch.bool), diagonal=1
-                )
-                span_start = span_end
-        else:
-            # causal attention mask for infilling sequence
-            bottom_right_target_part = torch.triu(
-                torch.ones((target_length, target_length), dtype=torch.bool), diagonal=1
-            )
-
-        right_target_part = torch.cat([top_right_target_part, bottom_right_target_part], dim=0)
-        return torch.cat([left_prefix_part, right_target_part], dim=1)
-
     def _get_ngram_ids(self, mask_positions: List[int], ngram_id: Optional[List[int]], seq_len: int) -> torch.Tensor:
         ngram_ids = np.ones(seq_len, dtype=np.int64) * ngram_ids_ignore_index
         if ngram_id is not None:
@@ -1146,25 +1108,7 @@ class DataCollatorForInfilling(DataCollator):
             self.whole_seq_length = max_length
         input_ids = torch.from_numpy(np.stack(self.pad(inputs, self.whole_seq_length), axis=0)).long()
         label_ids = torch.from_numpy(np.stack(self.pad(labels, self.whole_seq_length), axis=0)).long()
-
-        # padding mask (batch_size, seq_len)
-        batch_size, seq_len, _ = input_ids.shape
-        padding_mask = torch.zeros((batch_size, seq_len), dtype=torch.bool)
-        for i, input_length in enumerate(input_lengths):
-            padding_mask[i, input_length:] = True
-
-        # attention mask (batch_size, seq_len, seq_len)
-        attention_mask = torch.stack(
-            [
-                self._get_attention_mask(
-                    source_length,
-                    seq_len,
-                    target_span_lengths=target_span_lengths if self.span_independent_infilling else None,
-                )
-                for source_length, target_span_lengths in zip(source_lengths, target_span_lengths_list)
-            ],
-            dim=0,
-        )
+        _, seq_len, _ = input_ids.shape
 
         # ngram ids and types
         if self.ngram_classification:
@@ -1196,8 +1140,9 @@ class DataCollatorForInfilling(DataCollator):
         return DataBatch(
             input_ids,
             label_ids,
-            padding_mask,
-            attention_mask,
+            attention_kind="prefix",
+            lengths=input_lengths,
+            source_lengths=source_lengths,
             ngram_types=ngram_types,
             ngram_ids=ngram_ids,
             span_indices=span_indices,
@@ -1305,19 +1250,6 @@ class DataCollatorForRecovery(DataCollator):
         )
         return input, label
 
-    def _get_attention_mask(self, source_length: int, seq_len: int) -> torch.Tensor:
-        # bidirectional attention mask for prefix sequence
-        left_prefix_part = torch.zeros((seq_len, source_length), dtype=torch.bool)
-
-        target_length = seq_len - source_length
-        top_right_target_part = torch.ones((source_length, target_length), dtype=torch.bool)
-
-        # causal attention mask for infilling sequence
-        bottom_right_target_part = torch.triu(torch.ones((target_length, target_length), dtype=torch.bool), diagonal=1)
-
-        right_target_part = torch.cat([top_right_target_part, bottom_right_target_part], dim=0)
-        return torch.cat([left_prefix_part, right_target_part], dim=1)
-
     def __call__(self, batch: List[DatasetItem]) -> DataBatch:
         data_list = [item.data for item in batch]
         extra_data_list = [item.extra_data for item in batch]
@@ -1354,19 +1286,14 @@ class DataCollatorForRecovery(DataCollator):
         input_ids = torch.from_numpy(np.stack(self.pad(inputs, self.whole_seq_length), axis=0)).long()
         label_ids = torch.from_numpy(np.stack(self.pad(labels, self.whole_seq_length), axis=0)).long()
 
-        # padding mask (batch_size, seq_len)
-        batch_size, seq_len, _ = input_ids.shape
-        padding_mask = torch.zeros((batch_size, seq_len), dtype=torch.bool)
-        for i, input_length in enumerate(input_lengths):
-            padding_mask[i, input_length:] = True
-
-        # attention mask (batch_size, seq_len, seq_len)
-        attention_mask = torch.stack(
-            [self._get_attention_mask(source_length, seq_len) for source_length in source_lengths],
-            dim=0,
+        return DataBatch(
+            input_ids,
+            label_ids,
+            attention_kind="prefix",
+            lengths=input_lengths,
+            source_lengths=source_lengths,
+            filenames=filenames,
         )
-
-        return DataBatch(input_ids, label_ids, padding_mask, attention_mask, filenames=filenames)
 
 
 class MelodyDataset(Dataset):
