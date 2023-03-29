@@ -4,14 +4,14 @@ model:
   init_args:
     embedding_dim:
       bar: 32
-      position: 128
-      duration: 128
-      pitch: 256
+      position: 192
+      duration: 192
+      pitch: 384
       tempo: 32
-    model_dim: 512
-    feedforward_dim: 2048
-    num_layers: 8
-    num_heads: 8
+    model_dim: 768
+    feedforward_dim: 3072
+    num_layers: 12
+    num_heads: 12
     dropout: 0.1
     lr: 5e-4
     betas: [0.9, 0.98]

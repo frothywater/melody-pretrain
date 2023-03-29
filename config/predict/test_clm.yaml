@@ -15,4 +15,4 @@ task:
   class_path: LanguageModelingTask
   init_args:
     seq_len: 256
-    random_crop: false
+    padding_only: true
