@@ -23,7 +23,6 @@ from .dataset import (
     ngram_ids_ignore_index,
 )
 from .module import CompoundTokenFuser
-from .ngram import get_lexicon_size
 from .utils import gumbel_sample
 
 
@@ -79,7 +78,6 @@ class InfillingTask(TrainingTask):
         random_crop: bool = True,
         permutated_infilling: bool = False,
         span_independent_infilling: bool = False,
-        field_specific_masking: bool = False,
     ):
         super().__init__(f"{kind}_{task_name}", weight)
         self.kinds = kind if isinstance(kind, list) else [kind]
@@ -90,7 +88,6 @@ class InfillingTask(TrainingTask):
         self.random_crop = random_crop
         self.permutated_infilling = permutated_infilling
         self.span_independent_infilling = span_independent_infilling
-        self.field_specific_masking = field_specific_masking
 
     def get_data_collator(self) -> DataCollator:
         masking = get_masking(
@@ -99,7 +96,6 @@ class InfillingTask(TrainingTask):
             mean_span_length=self.mean_span_length,
             random_crop=self.random_crop,
             probabilities=self.probabilities,
-            field_specific_masking=self.field_specific_masking,
         )
         return DataCollatorForInfilling(
             masking=masking,
@@ -120,7 +116,8 @@ class NgramClassificationTask(TrainingTask):
 
     def register_extra_modules(self, model) -> None:
         lexicon_path = os.path.join(model.dataset_dir, "ngram_data", "lexicon.pkl")
-        pitch_size, rhythm_size = get_lexicon_size(lexicon_path)
+        # TODO: get lexicon size
+        pitch_size, rhythm_size = 0, 0
         model.pitch_ngram_head = nn.Linear(model.model_dim, pitch_size)
         model.rhythm_ngram_head = nn.Linear(model.model_dim, rhythm_size)
 
@@ -288,7 +285,6 @@ class RecoveryTask(TrainingTask):
         mean_span_length: int = 4,
         seq_len: int = 256,
         random_crop: bool = True,
-        field_specific_masking: bool = False,
         random_mask_ratio: float = 0,
         random_replace_ratio: float = 0,
     ):
@@ -299,7 +295,6 @@ class RecoveryTask(TrainingTask):
         self.mean_span_length = mean_span_length
         self.seq_len = seq_len
         self.random_crop = random_crop
-        self.field_specific_masking = field_specific_masking
         self.random_mask_ratio = random_mask_ratio
         self.random_replace_ratio = random_replace_ratio
 
@@ -310,7 +305,6 @@ class RecoveryTask(TrainingTask):
             mean_span_length=self.mean_span_length,
             random_crop=self.random_crop,
             probabilities=self.probabilities,
-            field_specific_masking=self.field_specific_masking,
         )
         return DataCollatorForRecovery(
             masking=masking,
@@ -331,30 +325,28 @@ def get_masking(
     mean_span_length: int,
     random_crop: bool,
     probabilities: Optional[List[float]] = None,
-    field_specific_masking: bool = False,
 ):
     def _get_masking(kind: str):
         if kind == "span":
             return RandomSpanMasking(corruption_rate=corruption_rate, mean_span_length=mean_span_length)
         elif kind == "bar":
             return RandomBarMasking(corruption_rate=corruption_rate)
+        elif kind == "ngram":
+            return RandomNgramMasking(
+                corruption_rate=corruption_rate,
+                fallback_mean_span_length=mean_span_length,
+            )
         elif kind == "pitch_ngram":
             return RandomNgramMasking(
                 corruption_rate=corruption_rate,
                 fallback_mean_span_length=mean_span_length,
                 extra_data_field_name="pitch_ngrams",
-                field_specific_masking=field_specific_masking,
             )
         elif kind == "rhythm_ngram":
             return RandomNgramMasking(
                 corruption_rate=corruption_rate,
                 fallback_mean_span_length=mean_span_length,
                 extra_data_field_name="rhythm_ngrams",
-                field_specific_masking=field_specific_masking,
-            )
-        elif kind == "skeleton":
-            return RandomSkeletonUnitMasking(
-                corruption_rate=corruption_rate, rhythm_specific_masking=field_specific_masking
             )
         elif kind == "single":
             return SingleSpanMasking(corruption_rate=corruption_rate)

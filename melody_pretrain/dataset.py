@@ -411,9 +411,10 @@ class RandomBarMasking(InfillingMasking):
 
     def _process_bar_spans(self, bar_spans: np.ndarray, start: int, end: int) -> np.ndarray:
         """Pick bar spans within given range and shift them to start from 0."""
-        bar_spans = bar_spans[(bar_spans[:, 0] >= start) & (bar_spans[:, 1] <= end)]
+        bar_spans = bar_spans[(bar_spans["start"] >= start) & (bar_spans["end"] <= end)]
         assert len(bar_spans) > 0, "No bar spans found."
-        bar_spans = bar_spans - start
+        bar_spans["start"] -= start
+        bar_spans["end"] -= start
         return bar_spans
 
     def _get_random_noise_bars(self, bar_spans: np.ndarray, length: int) -> np.ndarray:
@@ -630,7 +631,6 @@ class RandomNgramMasking(InfillingMasking):
         corruption_rate: float = 0.15,
         extra_data_field_name: str = "ngrams",
         fallback_mean_span_length: int = 4,
-        field_specific_masking: bool = False,
     ):
         """Args:
         corruption_rate: corruption rate of ngram masking.
@@ -640,7 +640,6 @@ class RandomNgramMasking(InfillingMasking):
         super().__init__()
         self.corruption_rate = corruption_rate
         self.extra_data_field_name = extra_data_field_name
-        self.field_specific_masking = field_specific_masking
 
         self.random_span_masking = RandomSpanMasking(corruption_rate, fallback_mean_span_length)
 
@@ -658,13 +657,12 @@ class RandomNgramMasking(InfillingMasking):
         # bar, position, duration
         self.rhythm_ngram_padding_indices = [pitch_field_index]
 
-    def _process_ngram_spans(self, ngram_spans: np.ndarray, start: int, end: int) -> np.ndarray:
+    def _process_ngram_spans(self, ngrams: np.ndarray, start: int, end: int) -> np.ndarray:
         """Pick ngram spans within given range and shift them to start from 0."""
-        starts = ngram_spans[:, 0]
-        ends = ngram_spans[:, 0] + ngram_spans[:, 1]
-        ngram_spans = ngram_spans[(starts >= start) & (ends <= end)]
-        ngram_spans[:, 0] -= start
-        return ngram_spans
+        ngrams = ngrams[(ngrams["start"] >= start) & (ngrams["end"] <= end)]
+        ngrams["start"] -= start
+        ngrams["end"] -= start
+        return ngrams
 
     def _get_random_noise_ngrams(self, num_tokens: int, ngrams: np.ndarray) -> np.ndarray:
         """Get random ngrams.
@@ -688,7 +686,9 @@ class RandomNgramMasking(InfillingMasking):
         covered_indices = np.zeros(num_tokens, dtype=bool)
         noise_ngram_indices = []
         for index in permutation:
-            start, length, _ = ngrams[index]
+            start = ngrams["start"][index]
+            end = ngrams["end"][index]
+            length = end - start
             if current_noise_tokens >= num_noise_tokens:
                 break
             if np.any(covered_indices[start : start + length]):
@@ -712,9 +712,8 @@ class RandomNgramMasking(InfillingMasking):
             if not has_enough_noise_ngrams:
                 noise_ngram_spans = self.random_span_masking._get_random_spans(length)[1::2]
             else:
-                starts = ngrams[noise_ngram_indices, 0]
-                lengths = ngrams[noise_ngram_indices, 1]
-                ends = starts + lengths
+                starts = ngrams["start"][noise_ngram_indices]
+                ends = ngrams["end"][noise_ngram_indices]
                 noise_ngram_spans = np.stack([starts, ends], axis=1)
             noise_spans_list.append(noise_ngram_spans)
 
@@ -737,48 +736,37 @@ class RandomNgramMasking(InfillingMasking):
 
         # Sort by start index
         noise_ngram_spans = ngrams[noise_ngram_indices]
-        noise_ngram_spans = noise_ngram_spans[np.argsort(noise_ngram_spans[:, 0])]
+        noise_ngram_spans.sort(order="start")
 
         # Build masked data and target
         nonnoise_spans, noise_spans = [], []
         noise_span_indices = []
-        ngram_ids = []
         num_span = 0
-        for i, (start, length, ngram_id) in enumerate(noise_ngram_spans):
-            previous_end = noise_ngram_spans[i - 1, 0] + noise_ngram_spans[i - 1, 1] if i > 0 else 0
+        for i, ngram in enumerate(noise_ngram_spans):
+            start = ngram["start"]
+            length = ngram["length"]
+            previous_end = noise_ngram_spans["end"][i - 1] if i > 0 else 0
             if start > previous_end:
                 nonnoise_spans.append(data[previous_end:start])
                 noise_spans.append(data[start : start + length])
                 noise_span_indices.append(num_span + 1)
-                ngram_ids.append(ngram_id)
                 num_span += 2
             elif start == previous_end:
                 # this ngram is adjacent to the previous one
                 noise_spans.append(data[start : start + length])
                 noise_span_indices.append(num_span)
-                ngram_ids.append(ngram_id)
                 num_span += 1
             else:
                 raise RuntimeError("ngrams are overlapping")
         # Add the last span
-        previous_end = noise_ngram_spans[-1, 0] + noise_ngram_spans[-1, 1]
+        previous_end = noise_ngram_spans["end"][-1]
         if previous_end < seq_len:
             nonnoise_spans.append(data[previous_end:])
-
-        # field padding indices
-        field_padding_indices = (
-            (self.pitch_ngram_padding_indices if self.ngram_type == "pitch" else self.rhythm_ngram_padding_indices)
-            if self.field_specific_masking
-            else None
-        )
 
         return InfillingData(
             nonnoise_spans,
             noise_spans,
             noise_span_indices,
-            ngram_type=self.ngram_type,
-            ngram_ids=ngram_ids,
-            field_padding_indices=field_padding_indices,
         )
 
 
@@ -1328,8 +1316,9 @@ class MelodyDataset(Dataset):
         if self.load_bar_data:
             extra_data["bar_spans"] = file["bar_spans"]
         if self.load_ngram_data:
-            extra_data["pitch_ngrams"] = file["pitch_ngrams"]
-            extra_data["rhythm_ngrams"] = file["rhythm_ngrams"]
+            # extra_data["pitch_ngrams"] = file["pitch_ngrams"]
+            # extra_data["rhythm_ngrams"] = file["rhythm_ngrams"]
+            extra_data["ngrams"] = file["ngrams"]
         if self.load_skeleton_data:
             extra_data["skeleton_note_indices"] = file["skeleton_note_indices"]
         return DatasetItem(data, extra_data, filename)
