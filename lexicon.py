@@ -1,38 +1,48 @@
 import argparse
 import os
+from glob import glob
 
-from melody_pretrain.ngram import extract, prepare_lexicon, render_midi
+from melody_pretrain.ngram import BarOnsetNgram, MixedNgram, NgramExtractor, PitchClassNgram
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("subcommand", choices=["extract", "prepare", "render"])
+    parser.add_argument("subcommand", type=str, choices=["extract", "build", "prepare"])
+    parser.add_argument("--dataset_dir", type=str, required=True)
     parser.add_argument("--midi_dir", type=str)
-    parser.add_argument("--dataset_dir", type=str)
-    parser.add_argument("--length", type=int, default=8)
-    parser.add_argument("--top_p", type=float, default=0.1)
-    parser.add_argument("--override", action="store_true", default=False)
+    parser.add_argument("--length", type=int)
+    parser.add_argument("--ngram_kind", type=str, default="mixed", choices=["pitch_class", "bar_onset", "mixed"])
     args = parser.parse_args()
 
+    ngram_config_path = os.path.join(args.dataset_dir, "ngram", "config.json")
     if args.subcommand == "extract":
-        assert args.midi_dir is not None, "midi_dir is required"
-        assert args.dataset_dir is not None, "dataset_dir is required"
-        data_dir = os.path.join(args.dataset_dir, "ngram_data")
-        ngram_range = range(1, args.length + 1)
-        extract(args.midi_dir, data_dir, ngram_range)
+        assert args.midi_dir is not None
+        midi_files = glob(args.midi_dir + "/**/*.mid", recursive=True)
+        ngram_dir = os.path.join(args.dataset_dir, "ngram", "data")
+        os.makedirs(ngram_dir, exist_ok=True)
+
+        assert args.length is not None
+        if args.ngram_kind == "pitch_class":
+            ngram_type = PitchClassNgram
+        elif args.ngram_kind == "bar_onset":
+            ngram_type = BarOnsetNgram
+        elif args.ngram_kind == "mixed":
+            ngram_type = MixedNgram
+        extractor = NgramExtractor(n_range=(3, args.length), ngram_type=ngram_type)
+        extractor.extract_ngrams(midi_files, ngram_dir)
+        extractor.save_config(ngram_config_path)
+
+    elif args.subcommand == "build":
+        lexicon_path = os.path.join(args.dataset_dir, "ngram", "lexicon.pkl")
+        ngram_files = glob(os.path.join(args.dataset_dir, "ngram", "data", "*.pkl"))
+
+        extractor = NgramExtractor.from_config(ngram_config_path)
+        extractor.build_lexicon(ngram_files, lexicon_path)
+
     elif args.subcommand == "prepare":
-        assert args.dataset_dir is not None, "dataset_dir is required"
-        data_dir = os.path.join(args.dataset_dir, "ngram_data")
-        # check if ngram data exists
-        if not os.path.exists(os.path.join(data_dir, "ngram_pitch.pkl")) or not os.path.exists(
-            os.path.join(data_dir, "ngram_rhythm.pkl")
-        ) or args.override:
-            print("ngram data not found, extracting...")
-            assert args.midi_dir is not None, "midi_dir is required"
-            ngram_range = range(1, args.length + 1)
-            extract(args.midi_dir, data_dir, ngram_range)
-        prepare_lexicon(data_dir, top_p=args.top_p)
-    elif args.subcommand == "render":
-        assert args.dataset_dir is not None, "dataset_dir is required"
-        data_dir = os.path.join(args.dataset_dir, "ngram_data")
-        rendered_dir = os.path.join(data_dir, "rendered")
-        render_midi(data_dir, rendered_dir)
+        lexicon_path = os.path.join(args.dataset_dir, "ngram", "lexicon.pkl")
+        ngram_files = glob(os.path.join(args.dataset_dir, "ngram", "data", "*.pkl"))
+        label_dir = os.path.join(args.dataset_dir, "ngram", "label")
+        os.makedirs(label_dir, exist_ok=True)
+
+        extractor = NgramExtractor.from_config(ngram_config_path)
+        extractor.prepare_ngram_labels(ngram_files, lexicon_path, label_dir)

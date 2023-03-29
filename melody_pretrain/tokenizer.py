@@ -234,9 +234,10 @@ class MIDITokenizer:
         Args:
             token_ids: (num_tokens, num_features)
         Returns:
-            bar_spans: (num_bars, 2) array, each row is [start, end) of bar span.
+            bar_spans: numpy structured array with fields ["start", "end"]
         """
         bar_field_index = self.field_indices["bar"]
+        record_dtype = np.dtype([("start", np.int16), ("end", np.int16)])
         if not include_empty_bar:
             num_tokens, _ = token_ids.shape
             # only take actual tokens between <BOS> and <EOS> tokens
@@ -244,12 +245,13 @@ class MIDITokenizer:
             bar_fields = token_ids[1:-1, bar_field_index]
             bar_start_mask = np.concatenate([[True], bar_fields[:-1] != bar_fields[1:]])
             bar_start_indices = np.extract(bar_start_mask, np.arange(num_tokens - 2, dtype=np.int16))
-            bar_end_indices = np.concatenate([bar_start_indices[1:], [num_tokens - 2]], dtype=np.int16)
-            bar_spans = np.stack([bar_start_indices, bar_end_indices], axis=1)
-            # offset 1 to account for <BOS> and <EOS> tokens
-            bar_spans += 1
-            bar_spans[0, 0] = 0  # start of the first bar is always 0
-            bar_spans[-1, 1] = num_tokens  # end of the last bar is always num_tokens
+            bar_end_indices = np.concatenate([bar_start_indices[1:], [num_tokens - 2]])
+
+            bar_spans = np.zeros(len(bar_start_indices), dtype=record_dtype)
+            bar_spans["start"] = bar_start_indices + 1  # offset 1 to account for <BOS> token
+            bar_spans["end"] = bar_end_indices + 1
+            bar_spans["start"][0] = 0  # start of the first bar is always 0
+            bar_spans["end"][-1] = num_tokens  # end of the last bar is always num_tokens
             return bar_spans
         else:
             bar_spans = []
@@ -260,11 +262,11 @@ class MIDITokenizer:
                     continue
                 bar = token[bar_field_index]
                 if bar != current_bar:
-                    bar_spans += [[last_index, index]] * (bar - current_bar)
+                    bar_spans += [(last_index, index)] * (bar - current_bar)
                     current_bar = bar
                     last_index = index
-            bar_spans.append([last_index, len(token_ids)])
-            return np.array(bar_spans, dtype=np.int16)
+            bar_spans.append((last_index, len(token_ids)))
+            return np.array(bar_spans, dtype=record_dtype)
 
     def pitch_shift_augument_(self, token_ids: np.ndarray, shift_range: int = 6) -> None:
         """Pitch shift augumentation. This method will modify the token_ids in place.
@@ -293,6 +295,15 @@ class MIDITokenizer:
         info_str = f"representation: granularity={self.granularity}"
         token_size_str = ", ".join([f"{field_name}={len(d)}" for field_name, d in self.encoder.items()])
         return info_str + "\n" + token_size_str
+
+    def save_config(self, path: str):
+        config = {
+            "granularity": self.granularity,
+            "max_bar": self.max_bar,
+            "pitch_range": [self.pitch_range.start, self.pitch_range.stop],
+        }
+        with open(path, "w") as f:
+            json.dump(config, f)
 
     @staticmethod
     def from_config(path: str) -> "MIDITokenizer":
