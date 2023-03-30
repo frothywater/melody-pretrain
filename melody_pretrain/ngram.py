@@ -1,11 +1,12 @@
 import json
 import math
 import os
-import pickle
 from collections import defaultdict
 from multiprocessing import Pool
 from typing import Dict, List, Literal, Optional, Tuple, Type, Union
 
+# import pickle
+import _pickle as pickle
 import numpy as np
 from miditoolkit import MidiFile
 from tqdm import tqdm
@@ -61,11 +62,9 @@ class MixedNgram(Ngram):
         differences = [positions[i + 1] - positions[i] for i in range(len(positions) - 1)]
         if any(difference >= ticks_per_bar for difference in differences):
             return None
-        # bar_start = positions[0] // ticks_per_bar * ticks_per_bar
-        bar_start = positions[0]
 
         pcs = ((pitch - pitches[0]) % 12 for pitch in pitches)
-        onsets = (position - bar_start for position in positions)
+        onsets = (position - positions[0] for position in positions)
         return tuple(zip(pcs, onsets))
 
     @staticmethod
@@ -73,12 +72,13 @@ class MixedNgram(Ngram):
         result = []
         pcs, onsets = zip(*ngram)
         for i in range(len(ngram) - 1):
-            # bar_start = onsets[i] // ticks_per_bar * ticks_per_bar
-            bar_start = onsets[i]
             pc_unit = (0, (pcs[i + 1] - pcs[i]) % 12)
-            onset_unit = (onsets[i] - bar_start, onsets[i + 1] - bar_start)
+            onset_unit = (0, onsets[i + 1] - onsets[i])
             result.append(tuple(zip(pc_unit, onset_unit)))
         return result
+
+
+Lexicon = Dict[int, Dict[Tuple, float]]
 
 
 class NgramExtractor:
@@ -100,7 +100,7 @@ class NgramExtractor:
         ngram_type = globals()[config["ngram_type"]]
         return NgramExtractor(n_range, ngram_type)
 
-    def get_ngrams(self, midi_file: str) -> Dict[Tuple, int]:
+    def get_ngrams(self, midi_file: str) -> List[Tuple[Tuple, int]]:
         midi = MidiFile(midi_file)
         assert len(midi.instruments) == 1
         notes = midi.instruments[0].notes
@@ -117,18 +117,7 @@ class NgramExtractor:
                     ngrams.append(ngram)
                     indices.append(i)
 
-        result = {ngram: index for ngram, index in zip(ngrams, indices)}
-        return result
-
-    def get_ngram_frequency(self, ngram_file: str):
-        with open(ngram_file, "rb") as f:
-            ngrams = pickle.load(f)
-        frequency = defaultdict(int)
-        frequency_by_length = defaultdict(int)
-        for ngram in ngrams:
-            frequency[ngram] += 1
-            frequency_by_length[len(ngram)] += 1
-        return frequency, frequency_by_length
+        return list(zip(ngrams, indices))
 
     def extract_ngrams_file(self, midi_file: str, dest_path: str):
         ngrams = self.get_ngrams(midi_file)
@@ -148,40 +137,22 @@ class NgramExtractor:
             ]
             _ = [future.get() for future in tqdm(futures)]
 
-    def build_lexicon(self, ngram_files: List[str], dest_path: str):
-        print(f"loading ngrams from {len(ngram_files)} files...")
-        with Pool() as pool:
-            futures = [pool.apply_async(self.get_ngram_frequency, (ngram_file,)) for ngram_file in ngram_files]
-            results = [future.get() for future in tqdm(futures)]
-        frequency_list, frequency_by_length_list = zip(*results)
-
-        print("combining frequencies...")
+    def get_ngram_frequency(self, ngram_file: str):
+        with open(ngram_file, "rb") as f:
+            ngrams: List[Tuple[Tuple, int]] = pickle.load(f)
         frequency = defaultdict(int)
         frequency_by_length = defaultdict(int)
-        for freq, freq_by_length in zip(frequency_list, frequency_by_length_list):
-            for ngram, count in freq.items():
-                frequency[ngram] += count
-            for length, count in freq_by_length.items():
-                frequency_by_length[length] += count
-        print(f"total ngrams: {len(frequency)}")
-
-        print("calculating probs...")
-        for ngram, count in frequency.items():
-            frequency[ngram] = count / frequency_by_length[len(ngram)]
-
-        print("calculating scores...")
-        scores = self.get_ngram_scores(frequency, frequency_by_length)
-
-        print(f"saving to {dest_path}...")
-        with open(dest_path, "wb") as f:
-            pickle.dump(scores, f)
+        for ngram, _ in ngrams:
+            frequency[ngram] += 1
+            frequency_by_length[len(ngram)] += 1
+        return frequency, frequency_by_length
 
     def get_ngram_scores(
         self,
         prob: Dict[Tuple, float],
         count_by_length: Dict[int, float],
         mode: Union[Literal["t-test"], Literal["pmi"]] = "t-test",
-    ):
+    ) -> Lexicon:
         """
         Args:
             mode: "pmi" or "tscore", which method to use.
@@ -204,29 +175,79 @@ class NgramExtractor:
             else:
                 raise ValueError(f"Unknown mode: {mode}")
 
-        scores: Dict[Tuple, float] = {}
+        scores: Lexicon = defaultdict(dict)
         for ngram in tqdm(prob):
-            if len(ngram) in self.n_range:
-                scores[ngram] = _get_score(ngram)
+            scores[len(ngram)][ngram] = _get_score(ngram)
         return scores
 
-    def get_ngram_labels(self, ngram_file: str, lexicon: Dict[Tuple, float]) -> np.ndarray:
-        with open(ngram_file, "rb") as f:
-            ngrams: Dict[Tuple, int] = pickle.load(f)
-        ngrams = {ngram: index for ngram, index in ngrams.items() if len(ngram) in self.n_range}
+    def build_lexicon(self, ngram_files: List[str], dest_path: str):
+        print(f"loading ngrams from {len(ngram_files)} files...")
+        frequency = defaultdict(int)
+        frequency_by_length = defaultdict(int)
+        with Pool() as pool:
+            futures = [pool.apply_async(self.get_ngram_frequency, (ngram_file,)) for ngram_file in ngram_files]
+            for future in tqdm(futures):
+                freq, freq_by_length = future.get()
+                for ngram, count in freq.items():
+                    frequency[ngram] += count
+                for length, count in freq_by_length.items():
+                    frequency_by_length[length] += count
+        print(f"total ngrams: {len(frequency)}")
 
-        result = np.zeros(len(ngrams), dtype=[("start", "i4"), ("end", "i4"), ("length", "i4"), ("score", "f4")])
-        result["start"] = list(ngrams.values())
-        result["length"] = [len(ngram) for ngram in ngrams]
-        result["end"] = result["start"] + result["length"]
-        result["score"] = [lexicon[ngram] for ngram in ngrams]
-        result.sort(order=["start", "length", "score"], axis=0)
+        print("calculating probs...")
+        for ngram, count in tqdm(frequency.items()):
+            frequency[ngram] = count / frequency_by_length[len(ngram)]
+
+        print("calculating scores...")
+        lexicon = self.get_ngram_scores(frequency, frequency_by_length)
+
+        print("sorting scores by each length...")
+        for length, scores in lexicon.items():
+            print(f"{length}-gram:", len(lexicon[length]))
+            lexicon[length] = dict(sorted(scores.items(), key=lambda x: x[1], reverse=True))
+
+        print(f"saving to {dest_path}...")
+        with open(dest_path, "wb") as f:
+            pickle.dump(lexicon, f)
+
+    def filter_lexicon(self, lexicon: Lexicon, top_p: float = 1.0) -> Lexicon:
+        print(f"filtering lexicon by top p = {top_p:.2}")
+        # determine probabilities for each ngram length
+        probs = np.linspace(0.7, 0.3, len(self.n_range))
+        counts = [len(lexicon[length]) for length in self.n_range]
+        selected_counts = [int(prob * count) for prob, count in zip(probs, counts)]
+        probs = [prob / sum(selected_counts) * sum(counts) * top_p for prob in probs]
+
+        # select top ngrams for each length
+        total_count = 0
+        for i, length in enumerate(self.n_range):
+            original_count = len(lexicon[length])
+            k = int(probs[i] * original_count)
+            lexicon[length] = dict(list(lexicon[length].items())[:k])
+            total_count += len(lexicon[length])
+            print(f"{length}-gram: {original_count} * {probs[i]:.2%} = {len(lexicon[length])}")
+        print(f"total ngram: {total_count}")
+        return lexicon
+
+    def get_ngram_labels(self, ngram_file: str, lexicon: Lexicon) -> np.ndarray:
+        with open(ngram_file, "rb") as f:
+            ngrams: List[Tuple[Tuple, int]] = pickle.load(f)
+
+        data = []
+        for ngram, index in ngrams:
+            if len(ngram) in self.n_range and ngram in lexicon[len(ngram)]:
+                data.append((index, index + len(ngram), len(ngram), lexicon[len(ngram)][ngram]))
+
+        result = np.array(data, dtype=[("start", "i4"), ("end", "i4"), ("length", "i4"), ("score", "f4")])
+        result.sort(order=["start", "length", "score"])
         return result
 
-    def prepare_ngram_labels(self, ngram_files: List[str], lexicon_path: str, dest_dir: str):
+    def prepare_ngram_labels(self, ngram_files: List[str], dest_dir: str, lexicon_path: str, top_p: float = 1.0):
         print(f"loading lexicon from {lexicon_path}...")
         with open(lexicon_path, "rb") as f:
-            lexicon: Dict[Tuple, float] = pickle.load(f)
+            lexicon: Lexicon = pickle.load(f)
+
+        lexicon = self.filter_lexicon(lexicon, top_p)
 
         print(f"preparing ngram labels for {len(ngram_files)} files to {dest_dir}...")
         os.makedirs(dest_dir, exist_ok=True)

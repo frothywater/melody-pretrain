@@ -10,6 +10,7 @@ if __name__ == "__main__":
     parser.add_argument("--dataset_dir", type=str, required=True)
     parser.add_argument("--midi_dir", type=str)
     parser.add_argument("--length", type=int)
+    parser.add_argument("--top_p", type=float)
     parser.add_argument("--ngram_kind", type=str, default="mixed", choices=["pitch_class", "bar_onset", "mixed"])
     args = parser.parse_args()
 
@@ -36,6 +37,8 @@ if __name__ == "__main__":
         ngram_files = glob(os.path.join(args.dataset_dir, "ngram", "data", "*.pkl"))
 
         extractor = NgramExtractor.from_config(ngram_config_path)
+        if args.length is not None:
+            extractor.n_range = range(3, args.length + 1)
         extractor.build_lexicon(ngram_files, lexicon_path)
 
     elif args.subcommand == "prepare":
@@ -45,4 +48,6 @@ if __name__ == "__main__":
         os.makedirs(label_dir, exist_ok=True)
 
         extractor = NgramExtractor.from_config(ngram_config_path)
-        extractor.prepare_ngram_labels(ngram_files, lexicon_path, label_dir)
+        if args.length is not None:
+            extractor.n_range = range(3, args.length + 1)
+        extractor.prepare_ngram_labels(ngram_files, label_dir, lexicon_path, top_p=args.top_p)
