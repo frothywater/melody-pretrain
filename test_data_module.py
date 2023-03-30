@@ -1,4 +1,5 @@
 import os
+
 import torch
 
 from melody_pretrain.dataset import (
@@ -18,6 +19,7 @@ from melody_pretrain.dataset import (
 )
 from melody_pretrain.tokenizer import MIDITokenizer
 
+
 def get_data_module(mask: str):
     if mask == "span":
         masking = RandomSpanMasking(corruption_rate=0.5)
@@ -26,12 +28,12 @@ def get_data_module(mask: str):
     elif mask == "single":
         masking = SingleSpanMasking(corruption_rate=0.5)
     elif mask == "ngram":
-        masking = RandomNgramMasking(corruption_rate=0.5, extra_data_field_name="pitch_ngrams")
+        masking = RandomNgramMasking(corruption_rate=0.5)
     elif mask == "fixed_bar":
         masking = FixedBarMasking(6, 4, 6)
     data_collator = DataCollatorForRecovery(
         masking=masking,
-        seq_len=256,
+        seq_len=50,
         random_crop=False,
         random_mask_ratio=0.5,
     )

@@ -679,8 +679,9 @@ class RandomNgramMasking(InfillingMasking):
         num_noise_tokens = int(round(num_tokens * self.corruption_rate))
         num_noise_tokens = min(max(num_noise_tokens, 1), num_tokens - 1)
 
-        # Randomly select noise ngrams
+        # Sort ngrams by length in descending order, and then randomly permute them (within each length)
         permutation = np.random.permutation(len(ngrams))
+        permutation = permutation[ngrams[permutation]["length"].argsort()[::-1]]
 
         current_noise_tokens = 0
         covered_indices = np.zeros(num_tokens, dtype=bool)
