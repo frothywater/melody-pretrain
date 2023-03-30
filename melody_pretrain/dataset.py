@@ -581,11 +581,15 @@ class FixedBarMasking(InfillingMasking):
         """
         num_bars = len(bar_spans)
         assert num_bars >= self.num_total_bars, f"num_bars ({num_bars}) < num_total_bars ({self.num_total_bars})"
-        start_bar_index = np.random.randint(num_bars - self.num_total_bars + 1) if self.random_crop else 0
-        past_start = bar_spans[start_bar_index, 0]
-        past_end = bar_spans[start_bar_index + self.num_past_bars - 1, 1]
-        future_start = bar_spans[start_bar_index + self.num_past_bars + self.num_middle_bars, 0]
-        future_end = bar_spans[start_bar_index + self.num_total_bars - 1, 1]
+        start_bar_index = (
+            np.random.randint(num_bars - self.num_total_bars)
+            if self.random_crop and num_bars > self.num_total_bars
+            else 0
+        )
+        past_start = bar_spans[start_bar_index]["start"]
+        past_end = bar_spans[start_bar_index + self.num_past_bars - 1]["end"]
+        future_start = bar_spans[start_bar_index + self.num_past_bars + self.num_middle_bars]["start"]
+        future_end = bar_spans[start_bar_index + self.num_total_bars - 1]["end"]
         return past_start, past_end, future_start, future_end
 
     def mask_for_infilling(self, data: np.ndarray, **kwargs) -> InfillingData:
