@@ -210,44 +210,36 @@ class NgramExtractor:
         with open(dest_path, "wb") as f:
             pickle.dump(lexicon, f)
 
-    def filter_lexicon(self, lexicon: Lexicon, top_p: float = 1.0) -> Lexicon:
-        print(f"filtering lexicon by top p = {top_p:.2}")
-        # determine probabilities for each ngram length
-        probs = np.linspace(0.7, 0.3, len(self.n_range))
-        counts = [len(lexicon[length]) for length in self.n_range]
-        selected_counts = [int(prob * count) for prob, count in zip(probs, counts)]
-        probs = [prob / sum(selected_counts) * sum(counts) * top_p for prob in probs]
+    def get_lexicon_rank(self, lexicon: Lexicon) -> Dict[Tuple, float]:
+        rank: Dict[Tuple, float] = {}
+        for scores in lexicon.values():
+            count = len(scores)
+            for i, ngram in enumerate(scores):
+                rank[ngram] = i / count
+        return rank
 
-        # select top ngrams for each length
-        total_count = 0
-        for i, length in enumerate(self.n_range):
-            original_count = len(lexicon[length])
-            k = int(probs[i] * original_count)
-            lexicon[length] = dict(list(lexicon[length].items())[:k])
-            total_count += len(lexicon[length])
-            print(f"{length}-gram: {original_count} * {probs[i]:.2%} = {len(lexicon[length])}")
-        print(f"total ngram: {total_count}")
-        return lexicon
-
-    def get_ngram_labels(self, ngram_file: str, lexicon: Lexicon) -> np.ndarray:
+    def get_ngram_labels(self, ngram_file: str, rank: Dict[Tuple, float]) -> np.ndarray:
         with open(ngram_file, "rb") as f:
             ngrams: List[Tuple[Tuple, int]] = pickle.load(f)
 
         data = []
         for ngram, index in ngrams:
-            if len(ngram) in self.n_range and ngram in lexicon[len(ngram)]:
-                data.append((index, index + len(ngram), len(ngram), lexicon[len(ngram)][ngram]))
+            if len(ngram) in self.n_range and ngram in rank:
+                data.append((index, index + len(ngram), len(ngram), rank[ngram]))
 
-        result = np.array(data, dtype=[("start", "i4"), ("end", "i4"), ("length", "i4"), ("score", "f4")])
-        result.sort(order=["start", "length", "score"])
+        result = np.array(
+            data, dtype=[("start", np.int16), ("end", np.int16), ("length", np.int16), ("rank", np.float32)]
+        )
+        result.sort(order=["start", "length", "rank"])
         return result
 
-    def prepare_ngram_labels(self, ngram_files: List[str], dest_dir: str, lexicon_path: str, top_p: float = 1.0):
+    def prepare_ngram_labels(self, ngram_files: List[str], dest_dir: str, lexicon_path: str):
         print(f"loading lexicon from {lexicon_path}...")
         with open(lexicon_path, "rb") as f:
             lexicon: Lexicon = pickle.load(f)
 
-        lexicon = self.filter_lexicon(lexicon, top_p)
+        print(f"calculating lexicon rank...")
+        lexicon = self.get_lexicon_rank(lexicon)
 
         print(f"preparing ngram labels for {len(ngram_files)} files to {dest_dir}...")
         os.makedirs(dest_dir, exist_ok=True)
