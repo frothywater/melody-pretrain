@@ -184,7 +184,7 @@ class InfillingMasking(Masking):
     def get_estimated_num_noise_spans(self, seq_len: int) -> int:
         num_noise_tokens = int(round(seq_len * self.corruption_rate))
         num_noise_tokens = min(max(num_noise_tokens, 1), seq_len - 1)
-        mean_span_length = getattr(self, "mean_span_length", 3)
+        mean_span_length = getattr(self, "mean_span_length", 5)
         return int(round(num_noise_tokens / mean_span_length))
 
     def get_estimated_infilling_seq_length(self, seq_len: int) -> int:
@@ -315,7 +315,7 @@ class SingleSpanMasking(InfillingMasking):
 
 
 class RandomSpanMasking(InfillingMasking):
-    def __init__(self, corruption_rate: float = 0.15, mean_span_length: int = 4):
+    def __init__(self, corruption_rate: float = 0.15, mean_span_length: int = 5):
         super().__init__()
         self.corruption_rate = corruption_rate
         self.mean_span_length = mean_span_length
@@ -397,7 +397,7 @@ class RandomSpanMasking(InfillingMasking):
 
 class RandomBarMasking(InfillingMasking):
     # for estimate whole sequence length
-    mean_span_length = 2
+    mean_span_length = 5
 
     def __init__(self, corruption_rate: float = 0.15, extra_data_field_name: str = "bar_spans"):
         super().__init__()
@@ -420,14 +420,12 @@ class RandomBarMasking(InfillingMasking):
     def _get_random_noise_bars(self, bar_spans: np.ndarray, length: int) -> np.ndarray:
         """Get random noise bars.
         Args:
-            bar_spans: (num_bars, 2) array, where each row is a bar span.
+            bar_spans: structured array with fields "start" and "end".
             length: an integer scalar, the length of the sequence.
         Returns:
             noise_bars: (num_bars) bool array, where True means noise bar.
         """
         num_bars = len(bar_spans)
-        num_noise_tokens = int(round(length * self.corruption_rate))
-        num_noise_tokens = min(max(num_noise_tokens, 1), length - 1)
 
         # Randomly select bars until we have enough noise bars
         random_bar_indices = np.arange(num_bars)
@@ -435,11 +433,11 @@ class RandomBarMasking(InfillingMasking):
         noise_bars = np.zeros(num_bars, dtype=bool)
         current_noise_tokens = 0
         for index in random_bar_indices:
-            if current_noise_tokens >= num_noise_tokens:
-                break
-            noise_bars[index] = True
             start, end = bar_spans[index]
+            noise_bars[index] = True
             current_noise_tokens += end - start
+            if current_noise_tokens / length >= self.corruption_rate:
+                break
 
         return noise_bars
 
@@ -458,7 +456,6 @@ class RandomBarMasking(InfillingMasking):
         """Mask data with random bars for infilling. Put a single mask token for each bar.
         Args:
             data: (seq_len, num_features)
-            bar_spans: (num_bars, 2) array of (start, end) indices
             offset: offset of data in the original sequence, in case random cropping is used
         """
         seq_len, _ = data.shape
@@ -477,80 +474,6 @@ class RandomBarMasking(InfillingMasking):
                 # non-noise bar
                 nonnoise_spans.append(data[start:end])
         return InfillingData(nonnoise_spans, noise_spans, noise_span_indices)
-
-
-class RandomSkeletonUnitMasking(InfillingMasking):
-    need_to_mask_per_data = True
-    # for estimate whole sequence length
-    mean_span_length = 3
-
-    def __init__(
-        self,
-        corruption_rate: float = 0.15,
-        extra_data_field_name: str = "skeleton_note_indices",
-        rhythm_specific_masking: bool = False,
-    ):
-        super().__init__()
-        self.corruption_rate = corruption_rate
-        self.extra_data_field_name = extra_data_field_name
-        self.rhythm_specific_masking = rhythm_specific_masking
-
-    def setup_tokenizer(self, tokenizer: MIDITokenizer):
-        super().setup_tokenizer(tokenizer)
-        pitch_field_index = self.tokenizer.field_indices["pitch"]
-        tempo_field_index = self.tokenizer.field_indices["tempo"]
-        # bar, position, duration
-        self.rhythm_padding_indices = [pitch_field_index, tempo_field_index]
-
-    def _get_unit_spans(self, note_indices: np.ndarray, start: int, end: int) -> np.ndarray:
-        note_indices = note_indices[(note_indices >= start) & (note_indices < end)]
-        assert len(note_indices) > 0
-        start_indices = note_indices - start
-        end_indices = np.concatenate([start_indices[1:], [end - start]])
-        unit_spans = np.stack([start_indices, end_indices], axis=1)
-        return unit_spans
-
-    def _get_random_noise_units(self, unit_spans: np.ndarray, length: int) -> np.ndarray:
-        num_units = len(unit_spans)
-        num_noise_tokens = int(round(length * self.corruption_rate))
-        num_noise_tokens = min(max(num_noise_tokens, 1), length - 1)
-
-        # Randomly select skeleton units until we have enough noise units
-        random_unit_indices = np.arange(num_units)
-        np.random.shuffle(random_unit_indices)
-        noise_units = np.zeros(num_units, dtype=bool)
-        current_noise_tokens = 0
-        for index in random_unit_indices:
-            if current_noise_tokens >= num_noise_tokens:
-                break
-            noise_units[index] = True
-            start, end = unit_spans[index]
-            current_noise_tokens += end - start
-
-        return noise_units
-
-    def mask_for_infilling(self, data: np.ndarray, offset: int, **kwargs) -> InfillingData:
-        seq_len, _ = data.shape
-        note_indices = kwargs[self.extra_data_field_name]
-        unit_spans = self._get_unit_spans(note_indices, offset, offset + seq_len)
-        noise_units = self._get_random_noise_units(unit_spans, seq_len)
-
-        nonnoise_spans, noise_spans = [], []
-        noise_span_indices = []
-        for i, (start, end) in enumerate(unit_spans):
-            if noise_units[i]:
-                # noise unit
-                noise_spans.append(data[start:end])
-                noise_span_indices.append(i)
-            else:
-                # non-noise unit
-                nonnoise_spans.append(data[start:end])
-        return InfillingData(
-            nonnoise_spans,
-            noise_spans,
-            noise_span_indices,
-            field_padding_indices=self.rhythm_padding_indices if self.rhythm_specific_masking else None,
-        )
 
 
 class FixedBarMasking(InfillingMasking):
@@ -628,13 +551,13 @@ class FixedBarMasking(InfillingMasking):
 
 class RandomNgramMasking(InfillingMasking):
     # for estimate whole sequence length
-    mean_span_length = 3
+    mean_span_length = 5
 
     def __init__(
         self,
         corruption_rate: float = 0.15,
         extra_data_field_name: str = "ngrams",
-        fallback_mean_span_length: int = 4,
+        fallback_mean_span_length: int = 5,
     ):
         """Args:
         corruption_rate: corruption rate of ngram masking.
@@ -647,19 +570,9 @@ class RandomNgramMasking(InfillingMasking):
 
         self.random_span_masking = RandomSpanMasking(corruption_rate, fallback_mean_span_length)
 
-        self.ngram_type = "pitch" if self.extra_data_field_name == "pitch_ngrams" else "rhythm"
-
     def setup_tokenizer(self, tokenizer: MIDITokenizer):
         super().setup_tokenizer(tokenizer)
         self.random_span_masking.setup_tokenizer(tokenizer)
-        position_field_index = self.tokenizer.field_indices["position"]
-        duration_field_index = self.tokenizer.field_indices["duration"]
-        pitch_field_index = self.tokenizer.field_indices["pitch"]
-
-        # bar, pitch
-        self.pitch_ngram_padding_indices = [position_field_index, duration_field_index]
-        # bar, position, duration
-        self.rhythm_ngram_padding_indices = [pitch_field_index]
 
     def _process_ngram_spans(self, ngrams: np.ndarray, start: int, end: int) -> np.ndarray:
         """Pick ngram spans within given range and shift them to start from 0."""
@@ -671,55 +584,45 @@ class RandomNgramMasking(InfillingMasking):
     def _get_random_noise_ngrams(self, num_tokens: int, ngrams: np.ndarray) -> np.ndarray:
         """Get random ngrams.
         Args:
-            length: length of sequence
-            ngrams: (num_ngrams, 3) array of (start, length, id)
+            num_tokens: length of sequence.
+            ngrams: structured array with fields ["start", "end", "length", "rank"].
         Returns:
-            noise_ngram_indices: list of int, indices of noise ngrams
+            noise_spans: (num_noise_spans, 2) array of (start, end) indices.
             has_enough_noise_ngrams: whether there are enough noise ngrams.
         """
         if len(ngrams) == 0:
             return None, False
 
-        num_noise_tokens = int(round(num_tokens * self.corruption_rate))
-        num_noise_tokens = min(max(num_noise_tokens, 1), num_tokens - 1)
-
-        # Sort ngrams by length in descending order, and then randomly permute them (within each length)
+        # Randomly select ngrams until the corruption rate is reached
         permutation = np.random.permutation(len(ngrams))
-        permutation = permutation[ngrams[permutation]["length"].argsort()[::-1]]
-
-        current_noise_tokens = 0
         covered_indices = np.zeros(num_tokens, dtype=bool)
-        noise_ngram_indices = []
         for index in permutation:
-            start = ngrams["start"][index]
-            end = ngrams["end"][index]
-            length = end - start
-            if current_noise_tokens >= num_noise_tokens:
+            start, end = ngrams[index]["start"], ngrams[index]["end"]
+            covered_indices[start:end] = True
+            current_noise_tokens = covered_indices.sum()
+            if current_noise_tokens / num_tokens >= self.corruption_rate:
                 break
-            if np.any(covered_indices[start : start + length]):
-                continue
-            noise_ngram_indices.append(index)
-            covered_indices[start : start + length] = True
-            current_noise_tokens += length
+        
+        # Turn covered indices into spans
+        covered_indices = np.concatenate([[False], covered_indices, [False]])
+        indices = np.where(covered_indices[:-1] != covered_indices[1:])[0]
+        starts, ends = indices[::2], indices[1::2]
+        noise_spans = np.stack([starts, ends], axis=1).tolist()
 
-        has_enough_noise_ngrams = current_noise_tokens >= num_noise_tokens
-        return noise_ngram_indices, has_enough_noise_ngrams
+        has_enough_noise_ngrams = current_noise_tokens / num_tokens >= self.corruption_rate
+        return noise_spans, has_enough_noise_ngrams
 
     def mask_batch(
         self, inputs: torch.Tensor, lengths: List[int], offsets: List[int], **kwargs
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         noise_spans_list = []
         ngrams_list = kwargs[self.extra_data_field_name]
-        for i, (length, offset, ngrams) in enumerate(zip(lengths, offsets, ngrams_list)):
+        for length, offset, ngrams in zip(lengths, offsets, ngrams_list):
             ngrams = self._process_ngram_spans(ngrams, offset, offset + length)
-            noise_ngram_indices, has_enough_noise_ngrams = self._get_random_noise_ngrams(length, ngrams)
+            noise_ngram_spans, has_enough_noise_ngrams = self._get_random_noise_ngrams(length, ngrams)
 
             if not has_enough_noise_ngrams:
                 noise_ngram_spans = self.random_span_masking._get_random_spans(length)[1::2]
-            else:
-                starts = ngrams["start"][noise_ngram_indices]
-                ends = ngrams["end"][noise_ngram_indices]
-                noise_ngram_spans = np.stack([starts, ends], axis=1)
             noise_spans_list.append(noise_ngram_spans)
 
         return self._mask_batch_with_noise_spans(inputs, noise_spans_list)
@@ -728,43 +631,29 @@ class RandomNgramMasking(InfillingMasking):
         """Mask data with random n-grams. Put a single mask token for each n-gram.
         Args:
             data: (seq_len, num_features)
-            ngrams: (num_ngrams, 3) array of (start, length, id)
             offset: offset of data in the original sequence, in case random cropping is used
         """
         seq_len, _ = data.shape
         ngrams = kwargs[self.extra_data_field_name]
         ngrams = self._process_ngram_spans(ngrams, offset, offset + seq_len)
-        noise_ngram_indices, has_enough_noise_ngrams = self._get_random_noise_ngrams(seq_len, ngrams)
+        noise_ngram_spans, has_enough_noise_ngrams = self._get_random_noise_ngrams(seq_len, ngrams)
 
         if not has_enough_noise_ngrams:
             return self.random_span_masking.mask_for_infilling(data)
-
-        # Sort by start index
-        noise_ngram_spans = ngrams[noise_ngram_indices]
-        noise_ngram_spans.sort(order="start")
-
+        
         # Build masked data and target
         nonnoise_spans, noise_spans = [], []
         noise_span_indices = []
-        num_span = 0
-        for i, ngram in enumerate(noise_ngram_spans):
-            start = ngram["start"]
-            length = ngram["length"]
-            previous_end = noise_ngram_spans["end"][i - 1] if i > 0 else 0
-            if start > previous_end:
+        num_spans = 0
+        previous_end = 0
+        for start, end in noise_ngram_spans:
+            if previous_end < start:
                 nonnoise_spans.append(data[previous_end:start])
-                noise_spans.append(data[start : start + length])
-                noise_span_indices.append(num_span + 1)
-                num_span += 2
-            elif start == previous_end:
-                # this ngram is adjacent to the previous one
-                noise_spans.append(data[start : start + length])
-                noise_span_indices.append(num_span)
-                num_span += 1
-            else:
-                raise RuntimeError("ngrams are overlapping")
-        # Add the last span
-        previous_end = noise_ngram_spans["end"][-1]
+                num_spans += 1
+            noise_spans.append(data[start:end])
+            noise_span_indices.append(num_spans)
+            num_spans += 1
+            previous_end = end
         if previous_end < seq_len:
             nonnoise_spans.append(data[previous_end:])
 
@@ -1295,14 +1184,12 @@ class MelodyDataset(Dataset):
         data_dir: str,
         load_bar_data: bool = False,
         load_ngram_data: bool = False,
-        load_skeleton_data: bool = False,
         pitch_augumentation: bool = False,
     ):
         self.tokenizer: MIDITokenizer
         self.files = glob(os.path.join(data_dir, "*.npz"))
         self.load_bar_data = load_bar_data
         self.load_ngram_data = load_ngram_data
-        self.load_skeleton_data = load_skeleton_data
         self.pitch_augumentation = pitch_augumentation
 
     def setup_tokenizer(self, tokenizer: MIDITokenizer):
@@ -1321,11 +1208,9 @@ class MelodyDataset(Dataset):
         if self.load_bar_data:
             extra_data["bar_spans"] = file["bar_spans"]
         if self.load_ngram_data:
-            # extra_data["pitch_ngrams"] = file["pitch_ngrams"]
-            # extra_data["rhythm_ngrams"] = file["rhythm_ngrams"]
-            extra_data["ngrams"] = file["ngrams"]
-        if self.load_skeleton_data:
-            extra_data["skeleton_note_indices"] = file["skeleton_note_indices"]
+            extra_data["pitch_ngrams"] = file["pitch_ngrams"]
+            extra_data["rhythm_ngrams"] = file["rhythm_ngrams"]
+            # extra_data["ngrams"] = file["ngrams"]
         return DatasetItem(data, extra_data, filename)
 
 
@@ -1337,7 +1222,6 @@ class MelodyPretrainDataModule(pl.LightningDataModule):
         num_workers: int = 0,
         load_bar_data: bool = False,
         load_ngram_data: bool = False,
-        load_skeleton_data: bool = False,
         pitch_augumentation: bool = True,
         times_to_predict: int = 1,
         debug: bool = False,
@@ -1353,7 +1237,6 @@ class MelodyPretrainDataModule(pl.LightningDataModule):
         self.num_workers = num_workers
         self.load_bar_data = load_bar_data
         self.load_ngram_data = load_ngram_data
-        self.load_skeleton_data = load_skeleton_data
         self.pitch_augumentation = pitch_augumentation
         self.times_to_predict = times_to_predict
         self.debug = debug
@@ -1365,7 +1248,6 @@ class MelodyPretrainDataModule(pl.LightningDataModule):
             data_dir,
             load_bar_data=self.load_bar_data,
             load_ngram_data=self.load_ngram_data,
-            load_skeleton_data=self.load_skeleton_data,
             pitch_augumentation=self.pitch_augumentation,
         )
         dataset.setup_tokenizer(self.tokenizer)
