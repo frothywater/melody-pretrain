@@ -1,9 +1,9 @@
 # lightning.pytorch==1.8.3.post1
 seed_everything: 42
 trainer:
-  max_steps: 5000
+  max_steps: 10000
   accelerator: gpu
-  devices: "1,"
+  devices: 2
   precision: 16-mixed
   accumulate_grad_batches: 1
   gradient_clip_val: 1.0
@@ -21,25 +21,9 @@ trainer:
         logging_interval: step
     - class_path: ModelCheckpoint
       init_args:
-        every_n_train_steps: 500
-        save_top_k: 1
+        every_n_train_steps: 1000
         save_weights_only: true
         filename: "{step}"
 data:
   batch_size: 128
   num_workers: 8
-
-# debug
-# trainer:
-#   fast_dev_run: 100
-#   profiler:
-#     class_path: PyTorchProfiler
-#     init_args:
-#       filename: profile_result
-#       group_by_input_shapes: true
-#       record_module_names: true
-#       sort_by_key: cuda_memory_usage
-#       row_limit: -1
-#     dict_kwargs:
-#       profile_memory: true
-#       record_shapes: true

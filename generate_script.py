@@ -1,8 +1,8 @@
 import os
-import yaml
-
-from typing import Optional, Union, List
 from argparse import ArgumentParser
+from typing import List, Optional, Union
+
+import yaml
 
 
 def get_pretrain_config(dataset_dir: str, task: str, kind: str, corruption_rate: float, seq_len: int):
@@ -19,10 +19,17 @@ def get_pretrain_config(dataset_dir: str, task: str, kind: str, corruption_rate:
             raise ValueError(f"Unknown task: {task}")
         result = {
             "class_path": task_name,
-            "init_args": {"kind": masking, "corruption_rate": corruption_rate, "seq_len": seq_len, "random_mask_ratio": 0.15, **kwargs},
+            "init_args": {
+                "kind": masking,
+                "corruption_rate": corruption_rate,
+                "seq_len": seq_len,
+                **kwargs,
+            },
         }
         if weight is not None:
             result["init_args"]["weight"] = weight
+        if task == "recovery":
+            result["init_args"]["random_mask_ratio"] = 0.1
         return result
 
     if kind == "span":
@@ -35,6 +42,10 @@ def get_pretrain_config(dataset_dir: str, task: str, kind: str, corruption_rate:
     elif kind == "ngram":
         config["data"]["load_ngram_data"] = True
         config["task"].append(get_task_config("ngram"))
+    elif kind == "ngram-multi":
+        config["data"]["load_ngram_data"] = True
+        config["task"].append(get_task_config("pitch_ngram"))
+        config["task"].append(get_task_config("rhythm_ngram"))
     elif kind == "ngram-single":
         config["data"]["load_ngram_data"] = True
         config["task"].append(get_task_config("ngram"))
@@ -50,7 +61,7 @@ def get_model_script(
     config_path: str,
     experiment_dir: str,
     pretrain_steps: int = 10000,
-    finetune_steps: int = 2000,
+    finetune_steps: int = 5000,
     ckpt_path: str = "lightning_logs/version_0/checkpoints",
 ):
     def get_command(stage: str, model_dir: str, ckpt_path: Optional[str] = None):
@@ -125,10 +136,10 @@ def main():
     predict_scripts = []
 
     task = "recovery"
-    # kinds = ["ngram-single", "ngram-norm-single", "ngram-single-norm", "ngram", "ngram-norm", "single", "bar", "span"]
-    kinds = ["ngram-single", "ngram", "single", "bar", "span"]
-    corruption_rates = [0.8]
-    # corruption_rates = [0.8, 0.7, 0.6, 0.5]
+    kinds = ["ngram-multi"]
+    # kinds = ["ngram-multi", "ngram", "single", "bar", "span"]
+    corruption_rates = [0.7]
+    # corruption_rates = [0.9, 0.8, 0.7, 0.6, 0.5]
     for corruption_rate in corruption_rates:
         for kind in kinds:
             experiment_name = f"{kind}_{int(corruption_rate * 100)}"
