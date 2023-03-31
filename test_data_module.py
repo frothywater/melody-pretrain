@@ -13,7 +13,6 @@ from melody_pretrain.dataset import (
     MelodyPretrainDataModule,
     RandomBarMasking,
     RandomNgramMasking,
-    RandomSkeletonUnitMasking,
     RandomSpanMasking,
     SingleSpanMasking,
 )

@@ -33,31 +33,22 @@ def get_noise_bars(bar_spans: np.ndarray, num_tokens: int, corruption_rate: floa
 
 
 def get_noise_ngrams(ngrams: np.ndarray, num_tokens: int, corruption_rate: float) -> np.ndarray:
-    num_noise_tokens = int(round(num_tokens * corruption_rate))
-    num_noise_tokens = min(max(num_noise_tokens, 1), num_tokens - 1)
-
     if len(ngrams) == 0:
         return np.nan, np.nan
 
     permutation = np.random.permutation(len(ngrams))
-    permutation = permutation[ngrams[permutation]["length"].argsort()[::-1]]
 
-    current_noise_tokens = 0
     covered_indices = np.zeros(num_tokens, dtype=bool)
-    noise_ngram_indices = []
     noise_ngram_lengths = []
     for index in permutation:
         start = ngrams["start"][index]
         end = ngrams["end"][index]
         length = end - start
-        if current_noise_tokens >= num_noise_tokens:
-            break
-        if np.any(covered_indices[start : start + length]):
-            continue
-        noise_ngram_indices.append(index)
         noise_ngram_lengths.append(length)
         covered_indices[start : start + length] = True
-        current_noise_tokens += length
+        current_noise_tokens = covered_indices.sum()
+        if current_noise_tokens / num_tokens >= corruption_rate:
+            break
 
     noise_rate = current_noise_tokens / num_tokens
     mean_ngram_length = np.mean(noise_ngram_lengths) if len(noise_ngram_lengths) > 0 else np.nan
@@ -68,7 +59,7 @@ def get_sample_rate_job(filename: str, corruption_rate: float, max_length: int =
     file = np.load(filename)
     data = file["data"]
     bar_spans = file["bar_spans"]
-    ngrams = file["ngrams"]
+    ngrams = file["rhythm_ngrams"]
 
     def preprocess_spans(spans: np.ndarray, start: int, end: int):
         starts = spans["start"]
@@ -117,6 +108,6 @@ def get_sample_rate(dir: str, corruption_rate: float, file_count: int = 30000):
 
 
 if __name__ == "__main__":
-    rate = 0.8
+    rate = 0.9
     print("rate:", rate)
     get_sample_rate(dataset_dir, rate)
