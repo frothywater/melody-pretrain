@@ -34,8 +34,13 @@ class PitchClassNgram(Ngram):
         return tuple((pitch - pitches[0]) % 12 for pitch in pitches)
 
     @staticmethod
-    def split(ngram: Tuple) -> List[Tuple]:
-        return [(0, (ngram[i + 1] - ngram[i]) % 12) for i in range(len(ngram) - 1)]
+    def split(ngram: Tuple, index: Optional[int] = None) -> List[Tuple]:
+        if index is None:
+            return [(0, (ngram[i + 1] - ngram[i]) % 12) for i in range(len(ngram) - 1)]
+        else:
+            left = PitchClassNgram.from_notes(pitches=ngram[: index + 1])
+            right = PitchClassNgram.from_notes(pitches=ngram[index:])
+            return [left, right]
 
 
 class BarOnsetNgram(Ngram):
@@ -48,12 +53,17 @@ class BarOnsetNgram(Ngram):
         return tuple(position - bar_start for position in positions)
 
     @staticmethod
-    def split(ngram: Tuple) -> List[Tuple]:
-        result = []
-        for i in range(len(ngram) - 1):
-            bar_start = ngram[i] // ticks_per_bar * ticks_per_bar
-            result.append((ngram[i] - bar_start, ngram[i + 1] - bar_start))
-        return result
+    def split(ngram: Tuple, index: Optional[int] = None) -> List[Tuple]:
+        if index is None:
+            result = []
+            for i in range(len(ngram) - 1):
+                bar_start = ngram[i] // ticks_per_bar * ticks_per_bar
+                result.append((ngram[i] - bar_start, ngram[i + 1] - bar_start))
+            return result
+        else:
+            left = BarOnsetNgram.from_notes(positions=ngram[: index + 1])
+            right = BarOnsetNgram.from_notes(positions=ngram[index:])
+            return [left, right]
 
 
 class MixedNgram(Ngram):
@@ -68,14 +78,21 @@ class MixedNgram(Ngram):
         return tuple(zip(pcs, onsets))
 
     @staticmethod
-    def split(ngram: Tuple) -> List[Tuple]:
-        result = []
-        pcs, onsets = zip(*ngram)
-        for i in range(len(ngram) - 1):
-            pc_unit = (0, (pcs[i + 1] - pcs[i]) % 12)
-            onset_unit = (0, onsets[i + 1] - onsets[i])
-            result.append(tuple(zip(pc_unit, onset_unit)))
-        return result
+    def split(ngram: Tuple, index: Optional[int] = None) -> List[Tuple]:
+        if index is None:
+            result = []
+            pcs, onsets = zip(*ngram)
+            for i in range(len(ngram) - 1):
+                pc_unit = (0, (pcs[i + 1] - pcs[i]) % 12)
+                onset_unit = (0, onsets[i + 1] - onsets[i])
+                result.append(tuple(zip(pc_unit, onset_unit)))
+            return result
+        else:
+            pitches = [pitch for pitch, _ in ngram]
+            positions = [position for _, position in ngram]
+            left = MixedNgram.from_notes(pitches=pitches[: index + 1], positions=positions[: index + 1])
+            right = MixedNgram.from_notes(pitches=pitches[index:], positions=positions[index:])
+            return [left, right]
 
 
 Lexicon = Dict[int, Dict[Tuple, float]]
@@ -151,7 +168,7 @@ class NgramExtractor:
         self,
         prob: Dict[Tuple, float],
         count_by_length: Dict[int, float],
-        mode: Union[Literal["t-test"], Literal["pmi"]] = "t-test",
+        mode: Union[Literal["t-test"], Literal["pmi"]] = "pmi",
     ) -> Lexicon:
         """
         Args:
@@ -161,17 +178,23 @@ class NgramExtractor:
         """
 
         def _get_score(ngram: Tuple) -> float:
-            iid_product = 1
-            for unit in self.ngram_type.split(ngram):
-                iid_product *= prob[unit]
-            product = prob[ngram]
-
+            if len(ngram) == 2:
+                return 0
             if mode == "t-test":
+                iid_product = 1
+                for unit in self.ngram_type.split(ngram):
+                    iid_product *= prob[unit]
+                product = prob[ngram]
                 sigma_sqr = product * (1 - product)
                 total_count = count_by_length[len(ngram)]
                 return (product - iid_product) / math.sqrt(sigma_sqr * total_count)
             elif mode == "pmi":
-                return math.log2(product / iid_product)
+                segment_score = []
+                for split_index in range(1, len(ngram) - 1):
+                    left, right = self.ngram_type.split(ngram, split_index)
+                    score = math.log(prob[ngram] / (prob[left] * prob[right]))
+                    segment_score.append(score)
+                return min(segment_score)
             else:
                 raise ValueError(f"Unknown mode: {mode}")
 
@@ -207,6 +230,7 @@ class NgramExtractor:
             lexicon[length] = dict(sorted(scores.items(), key=lambda x: x[1], reverse=True))
 
         print(f"saving to {dest_path}...")
+        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
         with open(dest_path, "wb") as f:
             pickle.dump(lexicon, f)
 
