@@ -18,6 +18,8 @@ from melody_pretrain.dataset import (
 )
 from melody_pretrain.tokenizer import MIDITokenizer
 
+dataset_dir = "experiment/dataset/wikifonia_remi"
+
 
 def get_data_module(mask: str):
     if mask == "span":
@@ -32,12 +34,12 @@ def get_data_module(mask: str):
         masking = FixedBarMasking(6, 4, 6)
     data_collator = DataCollatorForRecovery(
         masking=masking,
-        seq_len=50,
+        seq_len=100,
         random_crop=False,
         random_mask_ratio=0.5,
     )
     data_module = MelodyPretrainDataModule(
-        dataset_dir="experiment/dataset/melodynet",
+        dataset_dir=dataset_dir,
         batch_size=1,
         load_ngram_data=mask == "ngram",
         load_bar_data=mask == "bar" or mask == "fixed_bar",
@@ -50,7 +52,8 @@ def get_data_module(mask: str):
 
 if __name__ == "__main__":
     torch.set_printoptions(linewidth=1000)
-    tokenizer = MIDITokenizer.from_kwargs(kind="octuple")
+    tokenizer_config_path = os.path.join(dataset_dir, "tokenizer_config.json")
+    tokenizer = MIDITokenizer.from_config(tokenizer_config_path)
     print(tokenizer)
 
     def print_batch(batch: DataBatch, file=None):

@@ -403,30 +403,32 @@ class RandomBarMasking(InfillingMasking):
 
     def setup_tokenizer(self, tokenizer: MIDITokenizer):
         super().setup_tokenizer(tokenizer)
-        self.bar_field_index = tokenizer.field_names.index("bar")
-        self.bar_vocab_size = tokenizer.vocab_sizes[self.bar_field_index]
 
-    def _get_bar_token_spans(self, bar_note_spans: np.ndarray, note_map: np.ndarray, token_start: int, token_end: int) -> np.ndarray:
+    def _get_bar_token_spans(
+        self, bar_note_spans: np.ndarray, note_map: np.ndarray, token_start: int, token_end: int
+    ) -> np.ndarray:
         """Pick bar spans within given range and shift them to start from 0."""
         # get range of notes within the range of tokens
         note_start = (note_map["start"] >= token_start).nonzero()[0][0]
         note_end = (note_map["end"] <= token_end).nonzero()[0][-1] + 1
-        
+
         # get bar spans within the range of notes
-        filtered_bar_note_spans = bar_note_spans[(bar_note_spans["start"] >= note_start) & (bar_note_spans["end"] <= note_end)]
+        filtered_bar_note_spans = bar_note_spans[
+            (bar_note_spans["start"] >= note_start) & (bar_note_spans["end"] <= note_end)
+        ]
         assert len(filtered_bar_note_spans) > 0, "No bar spans found."
-        
+
         # convert bar spans to token spans and shift them to start from 0
         bar_token_spans = np.zeros_like(filtered_bar_note_spans)
         note_starts = filtered_bar_note_spans["start"]
         note_ends = filtered_bar_note_spans["end"] - 1
         bar_token_spans["start"] = note_map["start"][note_starts] - token_start
         bar_token_spans["end"] = note_map["end"][note_ends] - token_start
-        
+
         # ensure that token indices of notes at two ends cover the whole sequence
         bar_token_spans["start"][note_starts == 0] = 0
         bar_token_spans["end"][note_ends == len(note_map) - 1] = token_end - token_start
-        
+
         return bar_token_spans
 
     def _get_random_noise_bars(self, bar_token_spans: np.ndarray, length: int) -> np.ndarray:
@@ -527,7 +529,7 @@ class FixedBarMasking(InfillingMasking):
         middle_end_note = bar_note_spans[start_bar_index + self.num_past_bars + self.num_middle_bars - 1]["end"]
         future_start_note = bar_note_spans[start_bar_index + self.num_past_bars + self.num_middle_bars]["start"]
         future_end_note = bar_note_spans[start_bar_index + self.num_total_bars - 1]["end"]
-        
+
         # convert note indices to token indices
         past_start = note_map[past_start_note]["start"]
         past_end = note_map[past_end_note - 1]["end"]
@@ -535,7 +537,7 @@ class FixedBarMasking(InfillingMasking):
         middle_end = note_map[middle_end_note - 1]["end"]
         future_start = note_map[future_start_note]["start"]
         future_end = note_map[future_end_note - 1]["end"]
-        
+
         return past_start, past_end, middle_start, middle_end, future_start, future_end
 
     def mask_for_infilling(self, data: np.ndarray, note_map: np.ndarray, **kwargs) -> InfillingData:
@@ -549,7 +551,9 @@ class FixedBarMasking(InfillingMasking):
             target: (infilling_seq_len, num_features), with form of {<SEP>, tokens}
         """
         bar_note_spans = kwargs[self.extra_data_field_name]
-        past_start, past_end, middle_start, middle_end, future_start, future_end = self._get_fixed_bar_spans(bar_note_spans, note_map)
+        past_start, past_end, middle_start, middle_end, future_start, future_end = self._get_fixed_bar_spans(
+            bar_note_spans, note_map
+        )
 
         past = data[past_start:past_end]
         middle = data[middle_start:middle_end]
@@ -597,27 +601,31 @@ class RandomNgramMasking(InfillingMasking):
         super().setup_tokenizer(tokenizer)
         self.random_span_masking.setup_tokenizer(tokenizer)
 
-    def _get_ngrams(self, ngram_note_spans: np.ndarray, note_map: np.ndarray, token_start: int, token_end: int) -> np.ndarray:
+    def _get_ngrams(
+        self, ngram_note_spans: np.ndarray, note_map: np.ndarray, token_start: int, token_end: int
+    ) -> np.ndarray:
         """Pick ngram spans within given range and shift them to start from 0."""
-        
+
         # get range of notes within the range of tokens
         note_start = (note_map["start"] >= token_start).nonzero()[0][0]
         note_end = (note_map["end"] <= token_end).nonzero()[0][-1] + 1
-        
+
         # get ngram spans within the range of notes
-        filtered_ngram_note_spans = ngram_note_spans[(ngram_note_spans["start"] >= note_start) & (ngram_note_spans["end"] <= note_end)]
-        
+        filtered_ngram_note_spans = ngram_note_spans[
+            (ngram_note_spans["start"] >= note_start) & (ngram_note_spans["end"] <= note_end)
+        ]
+
         # convert ngram spans to token spans and shift them to start from 0
         ngram_token_spans = filtered_ngram_note_spans.copy()
         note_starts = filtered_ngram_note_spans["start"]
         note_ends = filtered_ngram_note_spans["end"] - 1
         ngram_token_spans["start"] = note_map["start"][note_starts] - token_start
         ngram_token_spans["end"] = note_map["end"][note_ends] - token_start
-        
+
         # ensure that token indices of notes at two ends cover the whole sequence
         ngram_token_spans["start"][note_starts == 0] = 0
         ngram_token_spans["end"][note_ends == len(note_map) - 1] = token_end - token_start
-        
+
         return ngram_token_spans
 
     def _get_random_noise_ngrams(self, num_tokens: int, ngrams: np.ndarray) -> np.ndarray:
@@ -861,7 +869,9 @@ class DataCollatorForMaskedLanguageModeling(DataCollator):
             batch_data = torch.from_numpy(np.stack(self.pad(data_list, self.seq_len), axis=0)).long()
             # get dict of extra data list from list of extra data dict
             extra_data = {k: [extra_data[k] for extra_data in extra_data_list] for k in extra_data_list[0]}
-            input_ids, label_ids = self.masking.mask_batch(batch_data, note_maps, lengths, offsets=offsets, **extra_data)
+            input_ids, label_ids = self.masking.mask_batch(
+                batch_data, note_maps, lengths, offsets=offsets, **extra_data
+            )
 
         filenames = [item.filename for item in batch]
         return DataBatch(input_ids, label_ids, attention_kind="full", lengths=lengths, filenames=filenames)
@@ -976,7 +986,7 @@ class DataCollatorForInfilling(DataCollator):
         data_list = [item.data for item in batch]
         extra_data_list = [item.extra_data for item in batch]
         note_maps = [item.note_map for item in batch]
-        
+
         # truncate
         data_list, offsets = self.truncate(data_list, self.seq_len, random_crop=self.random_crop)
 
@@ -1150,7 +1160,7 @@ class DataCollatorForRecovery(DataCollator):
         data_list = [item.data for item in batch]
         note_maps = [item.note_map for item in batch]
         extra_data_list = [item.extra_data for item in batch]
-        
+
         # truncate
         data_list, offsets = self.truncate(data_list, self.seq_len, random_crop=self.random_crop)
 
