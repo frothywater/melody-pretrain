@@ -55,7 +55,8 @@ def main():
     df["task"] = df["model"].apply(lambda x: x.split("/")[1] if x != "test" else None)
     df["model"] = df["model"].apply(lambda x: x.split("/")[0] if x != "test" else "test")
 
-    csv_path = os.path.join(args.experiment_dir, "result", "oa.csv")
+    csv_path = os.path.join(args.experiment_dir, "result", "metric.csv")
+    os.makedirs(os.path.dirname(csv_path), exist_ok=True)
     df.to_csv(csv_path, index=False)
 
 

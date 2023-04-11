@@ -15,6 +15,7 @@ import muspy
 import numpy as np
 import pandas as pd
 
+from .custom import get_distinct_ngram_percentage, get_bar_pair_similarity
 from .jazzeval import compute_piece_groove_similarity, compute_piece_pitch_entropy, convert_midi_to_events
 from .mgeval import extract_feature as mgeval_extract_feature
 from .mgeval import metrics as mgeval_metrics
@@ -45,10 +46,15 @@ mgeval_metric_names = mgeval_scalar_metric_names + mgeval_array_metric_names
 jazzeval_metric_names = ["pitch_entropy_1", "pitch_entropy_4", "groove_similarity"]
 muspy_metric_names = ["scale_consistency", "empty_beat_rate", "empty_measure_rate"]
 
-absolute_metric_names = mgeval_scalar_metric_names + jazzeval_metric_names + muspy_metric_names
-relative_metric_names = mgeval_metric_names
+custom_scalar_metric_names = ["distinct_ngram_percentage_short", "distinct_ngram_percentage_medium", "distinct_ngram_percentage_long"]
+custom_array_metric_names = ["bar_pair_similarity"]
+custom_metric_names = custom_scalar_metric_names + custom_array_metric_names
 
-all_metric_names = mgeval_metric_names + jazzeval_metric_names + muspy_metric_names
+absolute_metric_names = mgeval_scalar_metric_names + jazzeval_metric_names + muspy_metric_names + custom_scalar_metric_names
+oa_metric_names = mgeval_metric_names
+average_error_metric_names = custom_array_metric_names
+
+all_metric_names = mgeval_metric_names + jazzeval_metric_names + muspy_metric_names + custom_metric_names
 
 
 def compute_metric(midi_file: str, metric_name: str):
@@ -83,6 +89,15 @@ def compute_metric(midi_file: str, metric_name: str):
             return muspy.metrics.empty_beat_rate(midi)
         elif metric_name == "empty_measure_rate":
             return muspy.metrics.empty_measure_rate(midi, 1920)
+    elif metric_name in custom_metric_names:
+        if metric_name == "distinct_ngram_percentage_short":
+            return get_distinct_ngram_percentage(midi_file, n_range=(3, 5))
+        elif metric_name == "distinct_ngram_percentage_medium":
+            return get_distinct_ngram_percentage(midi_file, n_range=(6, 10))
+        elif metric_name == "distinct_ngram_percentage_long":
+            return get_distinct_ngram_percentage(midi_file, n_range=(11, 20))
+        elif metric_name == "bar_pair_similarity":
+            return get_bar_pair_similarity(midi_file)
     raise ValueError(f"Unknown metric: {metric_name}")
 
 
@@ -99,6 +114,10 @@ def compute_oa(generated_metrics: np.ndarray, test_metrics: np.ndarray):
     return oa
 
 
+def compute_average_error(generated_metrics: np.ndarray, test_metrics: np.ndarray):
+    return np.nanmean(np.abs(generated_metrics - test_metrics))
+
+
 def compute_absolute_metrics(dir: str):
     midi_files = glob(os.path.join(dir, "*.mid"), recursive=True)
     print(f"absolute metrics in {dir} for {len(midi_files)} files")
@@ -108,15 +127,27 @@ def compute_absolute_metrics(dir: str):
     return pd.DataFrame(data, index=[0])
 
 
-def compute_relative_metrics(generated_dir: str, test_dir: str):
+def compute_oa_metrics(generated_dir: str, test_dir: str):
     generated_files = glob(os.path.join(generated_dir, "*.mid"), recursive=True)
     test_files = glob(os.path.join(test_dir, "*.mid"), recursive=True)
-    print(f"relative metrics in {generated_dir} and {test_dir} for {len(generated_files)} and {len(test_files)} files")
+    print(f"OA metrics in {generated_dir} and {test_dir} for {len(generated_files)} and {len(test_files)} files")
     data = {}
-    for metric_name in relative_metric_names:
+    for metric_name in oa_metric_names:
         generated_metrics = compute_metrics(generated_files, metric_name)
         test_metrics = compute_metrics(test_files, metric_name)
         data[metric_name] = compute_oa(generated_metrics, test_metrics)
+    return pd.DataFrame(data, index=[0])
+
+
+def compute_average_error_metrics(generated_dir: str, test_dir: str):
+    generated_files = glob(os.path.join(generated_dir, "*.mid"), recursive=True)
+    test_files = glob(os.path.join(test_dir, "*.mid"), recursive=True)
+    print(f"average error metrics in {generated_dir} and {test_dir} for {len(generated_files)} and {len(test_files)} files")
+    data = {}
+    for metric_name in average_error_metric_names:
+        generated_metrics = compute_metrics(generated_files, metric_name)
+        test_metrics = compute_metrics(test_files, metric_name)
+        data[metric_name] = compute_average_error(generated_metrics, test_metrics)
     return pd.DataFrame(data, index=[0])
 
 
@@ -144,12 +175,20 @@ def compute_all_metrics_for_models(test_files: List[str], generated_files: Dict[
     # compute OA
     args_list = []
     for generated_metrics in generated_metrics_list:
-        for metric_name in relative_metric_names:
+        for metric_name in oa_metric_names:
             i = all_metric_names.index(metric_name)
             args_list.append((generated_metrics[i], test_metrics_list[i]))
     with Pool() as pool:
         results = pool.starmap(compute_oa, args_list)
-    oa_list = np.array(results).reshape(num_models, len(relative_metric_names))
+    oa_list = np.array(results).reshape(num_models, len(oa_metric_names))
+    
+    # compute average error
+    error_list = []
+    for model_index, generated_metrics in enumerate(generated_metrics_list):
+        for metric_name in average_error_metric_names:
+            i = all_metric_names.index(metric_name)
+            error_list.append(compute_average_error(generated_metrics[i], test_metrics_list[i]))
+    error_list = np.array(error_list).reshape(num_models, len(average_error_metric_names))
     
     # gather as DataFrame
     data = []
@@ -159,6 +198,9 @@ def compute_all_metrics_for_models(test_files: List[str], generated_files: Dict[
         for metric_index, metric_name in enumerate(absolute_metric_names):
             data.append({"model": generated_dir, "metric": metric_name, "kind": "mean", "value": mean_list[model_index, metric_index]})
     for model_index, generated_dir in enumerate(generated_files):
-        for metric_index, metric_name in enumerate(relative_metric_names):
+        for metric_index, metric_name in enumerate(oa_metric_names):
             data.append({"model": generated_dir, "metric": metric_name, "kind": "oa", "value": oa_list[model_index, metric_index]})
+    for model_index, generated_dir in enumerate(generated_files):
+        for metric_index, metric_name in enumerate(average_error_metric_names):
+            data.append({"model": generated_dir, "metric": metric_name, "kind": "error", "value": error_list[model_index, metric_index]})
     return pd.DataFrame(data)
