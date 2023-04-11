@@ -174,8 +174,10 @@ class MelodyPretrainModel(MelodyModel):
         # Optimizer hyperparameters
         lr: float,
         betas: Tuple[float, float],
+        epsilon: float,
         weight_decay: float,
         warmup_percent: float,
+        fixed_lr: bool = False,
         # Training configuration
         use_span_positional_encoding: bool = False,
         **kwargs,
@@ -193,22 +195,31 @@ class MelodyPretrainModel(MelodyModel):
 
         self.lr = lr
         self.betas = betas
+        self.epsilon = epsilon
         self.weight_decay = weight_decay
         self.warmup_percent = warmup_percent
+        self.fixed_lr = fixed_lr
 
         self.tasks: Dict[str, TrainingTask] = {}
 
     def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr, betas=self.betas, weight_decay=self.weight_decay)
-        lr_scheduler = torch.optim.lr_scheduler.OneCycleLR(
-            optimizer,
-            max_lr=self.lr,
-            total_steps=self.trainer.max_steps,
-            anneal_strategy="cos",
-            pct_start=self.warmup_percent,
+        optimizer = torch.optim.AdamW(
+            self.parameters(), lr=self.lr, betas=self.betas, eps=self.epsilon, weight_decay=self.weight_decay
         )
-        scheduler = {"scheduler": lr_scheduler, "interval": "step"}
-        return [optimizer], [scheduler]
+        if self.fixed_lr:
+            return optimizer
+        else:
+            total_steps = self.trainer.max_steps if self.trainer.max_steps > 0 else self.trainer.estimated_stepping_batches
+            print(f"Total steps: {total_steps}")
+            lr_scheduler = torch.optim.lr_scheduler.OneCycleLR(
+                optimizer,
+                max_lr=self.lr,
+                total_steps=total_steps,
+                anneal_strategy="cos",
+                pct_start=self.warmup_percent,
+            )
+            scheduler = {"scheduler": lr_scheduler, "interval": "step"}
+            return [optimizer], [scheduler]
 
     def register_task(self, task: TrainingTask):
         self.tasks[task.task_name] = task
