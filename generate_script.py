@@ -60,8 +60,7 @@ def get_model_script(
     experiment_name: str,
     config_path: str,
     experiment_dir: str,
-    pretrain_steps: int = 10000,
-    finetune_steps: int = 5000,
+    pretrain_steps: int = 100000,
     ckpt_path: str = "lightning_logs/version_0/checkpoints",
 ):
     def get_command(stage: str, model_dir: str, ckpt_path: Optional[str] = None):
@@ -106,19 +105,19 @@ def get_model_script(
     finetune_infilling_dir = f"{experiment_dir}/model/{experiment_name}/finetune_infilling"
 
     pretrain_ckpt_path = f"{pretrain_dir}/{ckpt_path}/step={pretrain_steps}.ckpt"
-    finetune_clm_ckpt_path = f"{finetune_clm_dir}/{ckpt_path}/step={finetune_steps}.ckpt"
-    finetune_infilling_ckpt_path = f"{finetune_infilling_dir}/{ckpt_path}/step={finetune_steps}.ckpt"
+    finetune_clm_ckpt_path = f"{finetune_clm_dir}/{ckpt_path}/best.ckpt"
+    finetune_infilling_ckpt_path = f"{finetune_infilling_dir}/{ckpt_path}/best.ckpt"
 
     lines = [
         f"# {experiment_name}",
-        get_command("pretrain", pretrain_dir),
+        # get_command("pretrain", pretrain_dir),
         get_command("finetune_clm", finetune_clm_dir, pretrain_ckpt_path),
-        get_command("finetune_infilling", finetune_infilling_dir, pretrain_ckpt_path),
+        # get_command("finetune_infilling", finetune_infilling_dir, pretrain_ckpt_path),
         # get_command("test", finetune_clm_dir, finetune_clm_ckpt_path),
     ]
     predict_lines = [
-        get_command("generate_infilling", finetune_infilling_dir, finetune_infilling_ckpt_path),
         get_command("generate_clm", finetune_clm_dir, finetune_clm_ckpt_path),
+        # get_command("generate_infilling", finetune_infilling_dir, finetune_infilling_ckpt_path),
     ]
     return "\n".join(lines), " &\n".join(predict_lines)
 
@@ -136,9 +135,10 @@ def main():
     predict_scripts = []
 
     task = "recovery"
-    kinds = ["ngram-multi"]
-    # kinds = ["ngram-multi", "ngram", "single", "bar", "span"]
-    corruption_rates = [0.7]
+    # task = "infilling"
+    # kinds = ["ngram-multi"]
+    kinds = ["ngram-multi", "single", "bar", "span"]
+    corruption_rates = [0.8]
     # corruption_rates = [0.9, 0.8, 0.7, 0.6, 0.5]
     for corruption_rate in corruption_rates:
         for kind in kinds:

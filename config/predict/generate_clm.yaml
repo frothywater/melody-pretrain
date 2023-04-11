@@ -4,7 +4,7 @@ trainer:
   callbacks: CustomWriter
   logger: false
   enable_checkpointing: false
-  devices: "0,"
+  devices: "1,"
   accelerator: gpu
   precision: 16-mixed
   strategy: ddp
