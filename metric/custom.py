@@ -35,17 +35,19 @@ def get_bar_pair_similarity(midi_file: str, max_bar_interval: int = 40):
         duration = note.end - note.start
         bar_notes[bar + 1].append((note.pitch, position, duration))
     
-    result = np.ones(max_bar_interval) * np.nan
-    if len(bar_notes) < 2:
+    max_bar = max(bar_notes.keys())
+    result = np.zeros(max_bar_interval, dtype=np.dtype([("similarity", np.float32), ("count", np.int64)]))
+    if max_bar < 2:
         return result
-    for interval in range(1, min(max_bar_interval + 1, len(bar_notes))):
+    for interval in range(1, min(max_bar, max_bar_interval + 1)):
         similarities = []
-        for i in range(len(bar_notes) - interval):
+        for i in range(max_bar - interval):
             bar1 = set(bar_notes[i])
             bar2 = set(bar_notes[i + interval])
             intersection = bar1 & bar2
             union = bar1 | bar2
             similarity = len(intersection) / len(union) if len(union) > 0 else 0
             similarities.append(similarity)
-        result[interval - 1] = np.mean(similarities)
+        result["similarity"][interval - 1] = np.sum(similarities)
+        result["count"][interval - 1] = len(similarities)
     return result

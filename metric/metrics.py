@@ -115,7 +115,12 @@ def compute_oa(generated_metrics: np.ndarray, test_metrics: np.ndarray):
 
 
 def compute_average_error(generated_metrics: np.ndarray, test_metrics: np.ndarray):
-    return np.nanmean(np.abs(generated_metrics - test_metrics))
+    # metrics: (num_files, num_bar_interval) of [similarity, count]
+    # 1. average over files
+    generated_metrics = generated_metrics["similarity"].sum(axis=0) / generated_metrics["count"].sum(axis=0)
+    test_metrics = test_metrics["similarity"].sum(axis=0) / test_metrics["count"].sum(axis=0)
+    # 2. mean over bar intervals
+    return np.mean(np.abs(generated_metrics - test_metrics))
 
 
 def compute_absolute_metrics(dir: str):
