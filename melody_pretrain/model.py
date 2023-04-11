@@ -351,6 +351,7 @@ class MelodyCompletionModel(MelodyModel):
         self.top_k = top_k
         self.max_length = max_length
         self.bar_field_index = self.tokenizer.field_indices["bar"]
+        self.bar_vocab_size = self.tokenizer.vocab_sizes[self.bar_field_index]
         self.attention_mask = torch.triu(torch.ones((max_length, max_length), dtype=torch.bool), diagonal=1)
         self.bos_token_tensor = torch.tensor(self.tokenizer.bos_token_ids, dtype=torch.long)
         self.eos_token_tensor = torch.tensor(self.tokenizer.eos_token_ids, dtype=torch.long)
@@ -374,7 +375,10 @@ class MelodyCompletionModel(MelodyModel):
             # Crop the input to the conditional bar length
             conditional_bar_token_id = self.tokenizer.encoder["bar"][self.conditional_bar_length]
 
-            conditional_bar_test = (input_ids[0, :, self.bar_field_index] >= conditional_bar_token_id).nonzero()
+            bar_data = input_ids[0, :, self.bar_field_index]
+            conditional_bar_test = torch.nonzero(
+                (bar_data >= conditional_bar_token_id) & (bar_data < self.bar_vocab_size)
+            )
             assert len(conditional_bar_test) > 0, "No conditional bar token found in the input"
             conditional_bar_index = conditional_bar_test[0, 0].item()
             input_ids = input_ids[:, :conditional_bar_index, :]
@@ -398,8 +402,9 @@ class MelodyCompletionModel(MelodyModel):
             # print(token)
 
             # until <EOS> token or the desired bar length is reached
-            if torch.any(sampled_tokens == self.eos_token_tensor) or (
-                sampled_tokens[self.bar_field_index] >= prediction_bar_token_id
+            sampled_bar = sampled_tokens[self.bar_field_index]
+            if torch.all(sampled_tokens == self.eos_token_tensor) or (
+                (sampled_bar >= prediction_bar_token_id) & (sampled_bar < self.bar_vocab_size)
             ):
                 break
 
