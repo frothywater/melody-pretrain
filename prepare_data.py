@@ -10,10 +10,39 @@ from tqdm import tqdm
 
 from melody_pretrain.tokenizer import MIDITokenizer
 
+bar_span_record_dtype = np.dtype([("start", np.int16), ("end", np.int16)])
+
+
+def get_bar_spans(midi: MidiFile, include_empty_bar: bool) -> np.ndarray:
+    bar_indices = np.array(
+        [note.start // (midi.ticks_per_beat * 4) for note in midi.instruments[0].notes], dtype=np.int16
+    )
+    num_notes = len(bar_indices)
+
+    if not include_empty_bar:
+        bar_start_mask = np.concatenate([[True], bar_indices[:-1] != bar_indices[1:]])
+        bar_start_indices = np.extract(bar_start_mask, np.arange(num_notes, dtype=np.int16))
+        bar_end_indices = np.concatenate([bar_start_indices[1:], [num_notes]])
+
+        bar_spans = np.zeros(len(bar_start_indices), dtype=bar_span_record_dtype)
+        bar_spans["start"] = bar_start_indices
+        bar_spans["end"] = bar_end_indices
+        return bar_spans
+    else:
+        bar_spans = []
+        current_bar, last_index = 0, 0
+        for index, bar in enumerate(bar_indices):
+            if bar != current_bar:
+                bar_spans += [(last_index, index)] * (bar - current_bar)
+                current_bar = bar
+                last_index = index
+        bar_spans.append((last_index, num_notes))
+        return np.array(bar_spans, dtype=bar_span_record_dtype)
+
 
 def get_ngrams(ngram_file: str, length: Optional[int], top_p: Optional[float]) -> np.ndarray:
     ngrams = np.load(ngram_file)
-    
+
     # filter ngrams
     if length is not None:
         ngrams = ngrams[ngrams["length"] <= length]
@@ -47,8 +76,10 @@ def prepare_data_job(
 ):
     """Prepare data for a single midi file. Return the length of the encoded data."""
     midi = MidiFile(midi_file)
-    data, note_map, bar_spans = tokenizer.encode(midi, return_bar_spans=True, include_empty_bar=include_empty_bar)
-    results = {"data": data, "note_map": note_map, "bar_spans": bar_spans}
+    data, note_map = tokenizer.encode(midi)
+    results = {"data": data, "note_map": note_map}
+
+    results["bar_spans"] = get_bar_spans(midi, include_empty_bar)
 
     if mixed_ngram_file:
         results["ngrams"] = get_ngrams(mixed_ngram_file, ngram_length, ngram_top_p)
@@ -68,6 +99,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--midi_dir", type=str, required=True)
     parser.add_argument("--dataset_dir", type=str, required=True)
+    parser.add_argument("--kind", type=str, required=True)
     parser.add_argument("--granularity", type=int, default=64)
     parser.add_argument("--max_bar", type=int, default=128)
     parser.add_argument("--pitch_range", type=int, nargs=2, default=(0, 128))
@@ -98,7 +130,8 @@ if __name__ == "__main__":
         file_args.append((midi_file, mixed_ngram_file, pitch_ngram_file, rhythm_ngram_file, dest_path))
 
     # prepare tokenizer
-    tokenizer = MIDITokenizer(
+    tokenizer = MIDITokenizer.from_kwargs(
+        kind=args.kind,
         granularity=args.granularity,
         max_bar=args.max_bar,
         pitch_range=args.pitch_range,

@@ -27,7 +27,7 @@ def get_data_module(mask: str):
     elif mask == "single":
         masking = SingleSpanMasking(corruption_rate=0.5)
     elif mask == "ngram":
-        masking = RandomNgramMasking(corruption_rate=0.5)
+        masking = RandomNgramMasking(corruption_rate=0.5, extra_data_field_name="pitch_ngrams")
     elif mask == "fixed_bar":
         masking = FixedBarMasking(6, 4, 6)
     data_collator = DataCollatorForRecovery(
@@ -50,7 +50,7 @@ def get_data_module(mask: str):
 
 if __name__ == "__main__":
     torch.set_printoptions(linewidth=1000)
-    tokenizer = MIDITokenizer()
+    tokenizer = MIDITokenizer.from_kwargs(kind="octuple")
     print(tokenizer)
 
     def print_batch(batch: DataBatch, file=None):

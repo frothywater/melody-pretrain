@@ -417,7 +417,7 @@ class RandomBarMasking(InfillingMasking):
         assert len(filtered_bar_note_spans) > 0, "No bar spans found."
         
         # convert bar spans to token spans and shift them to start from 0
-        bar_token_spans = np.empty_like(filtered_bar_note_spans)
+        bar_token_spans = np.zeros_like(filtered_bar_note_spans)
         note_starts = filtered_bar_note_spans["start"]
         note_ends = filtered_bar_note_spans["end"] - 1
         bar_token_spans["start"] = note_map["start"][note_starts] - token_start
