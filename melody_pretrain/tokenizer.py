@@ -1,6 +1,6 @@
 import json
 from math import floor, log2
-from typing import Dict, List, NamedTuple, Tuple, Union
+from typing import Dict, List, NamedTuple, Optional, Tuple, Union
 
 import numpy as np
 from miditoolkit import Instrument, MidiFile, Note, TempoChange
@@ -147,9 +147,6 @@ class MIDITokenizer:
             duration = self._find_nearest(self.duration_bins, note.end - note.start)
             tempo = self._find_nearest(self.tempo_bins, tempo_changes[current_tempo_index].tempo)
             tokens.append(MIDICompoundToken(bar, position, duration, note.pitch, tempo))
-
-        # prepend <BOS> and append <EOS>
-        tokens = [self.bos_token] + tokens + [self.eos_token]
         return tokens
 
     def detokenize(self, tokens: List[MIDICompoundToken], velocity=100) -> MidiFile:
@@ -205,19 +202,33 @@ class MIDITokenizer:
     def convert_id_to_token(self, token: np.ndarray) -> MIDICompoundToken:
         return self.convert_ids_to_tokens(np.expand_dims(token, axis=0))[0]
 
-    def encode(self, midi: MidiFile, return_bar_spans: bool = False, include_empty_bar: bool = False) -> np.ndarray:
+    def get_ids_with_bos_eos(self, token_ids: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        indices = np.arange(len(token_ids), dtype=np.int16)
+        note_map = np.zeros(len(token_ids), dtype=note_map_record_dtype)
+        note_map["start"] = indices + 1  # +1 for bos token
+        note_map["end"] = indices + 2
+        token_ids = np.concatenate([[self.bos_token_ids], token_ids, [self.eos_token_ids]], axis=0)
+        return token_ids, note_map
+
+    def encode(
+        self, midi: MidiFile, return_bar_spans: bool = False, include_empty_bar: bool = False
+    ) -> Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]:
         """Encode midi file to token ids.
         Args:
             midi: midi file to encode.
         Returns:
-            token_ids: (length, field)
+            token_ids: (length, field).
+            note_map: (num_note) with columns [start, end] mapping note index to token index.
         """
         tokens = self.tokenize(midi)
         token_ids = self.convert_tokens_to_ids(tokens)
         if return_bar_spans:
             bar_spans = self.get_bar_spans(token_ids, include_empty_bar=include_empty_bar)
-            return token_ids, bar_spans
-        return token_ids
+        else:
+            bar_spans = None
+        token_ids, note_map = self.get_ids_with_bos_eos(token_ids)
+
+        return token_ids, note_map, bar_spans
 
     def decode(self, token_ids: np.ndarray) -> MidiFile:
         """Decode token ids to midi file.
@@ -237,36 +248,28 @@ class MIDITokenizer:
             bar_spans: numpy structured array with fields ["start", "end"]
         """
         bar_field_index = self.field_indices["bar"]
-        record_dtype = np.dtype([("start", np.int16), ("end", np.int16)])
         if not include_empty_bar:
             num_tokens, _ = token_ids.shape
-            # only take actual tokens between <BOS> and <EOS> tokens
-            # assert np.all(token_ids[0] == self.bos_token_ids) and np.all(token_ids[-1] == self.eos_token_ids)
-            bar_fields = token_ids[1:-1, bar_field_index]
+            bar_fields = token_ids[:, bar_field_index]
             bar_start_mask = np.concatenate([[True], bar_fields[:-1] != bar_fields[1:]])
-            bar_start_indices = np.extract(bar_start_mask, np.arange(num_tokens - 2, dtype=np.int16))
-            bar_end_indices = np.concatenate([bar_start_indices[1:], [num_tokens - 2]])
+            bar_start_indices = np.extract(bar_start_mask, np.arange(num_tokens, dtype=np.int16))
+            bar_end_indices = np.concatenate([bar_start_indices[1:], [num_tokens]])
 
-            bar_spans = np.zeros(len(bar_start_indices), dtype=record_dtype)
-            bar_spans["start"] = bar_start_indices + 1  # offset 1 to account for <BOS> token
-            bar_spans["end"] = bar_end_indices + 1
-            bar_spans["start"][0] = 0  # start of the first bar is always 0
-            bar_spans["end"][-1] = num_tokens  # end of the last bar is always num_tokens
+            bar_spans = np.zeros(len(bar_start_indices), dtype=bar_span_record_dtype)
+            bar_spans["start"] = bar_start_indices
+            bar_spans["end"] = bar_end_indices
             return bar_spans
         else:
             bar_spans = []
             current_bar, last_index = 0, 0
             for index, token in enumerate(token_ids):
-                # consider <BOS> and <EOS> tokens
-                if np.all(token == self.bos_token_ids) or np.all(token == self.eos_token_ids):
-                    continue
                 bar = token[bar_field_index]
                 if bar != current_bar:
                     bar_spans += [(last_index, index)] * (bar - current_bar)
                     current_bar = bar
                     last_index = index
             bar_spans.append((last_index, len(token_ids)))
-            return np.array(bar_spans, dtype=record_dtype)
+            return np.array(bar_spans, dtype=bar_span_record_dtype)
 
     def pitch_shift_augument_(self, token_ids: np.ndarray, shift_range: int = 6) -> None:
         """Pitch shift augumentation. This method will modify the token_ids in place.
@@ -277,9 +280,12 @@ class MIDITokenizer:
         pitch_shift = np.random.randint(-shift_range, shift_range + 1)
         pitch_field_index = self.field_indices["pitch"]
 
-        # Only adjust actual tokens between <BOS> and <EOS> tokens
-        assert np.all(token_ids[0] == self.bos_token_ids) and np.all(token_ids[-1] == self.eos_token_ids)
-        token_ids = token_ids[1:-1]
+        # Only adjust non special tokens
+        non_special_token_mask = (token_ids[:, pitch_field_index] != self.bos_token_ids[pitch_field_index]) & (
+            token_ids[:, pitch_field_index] != self.eos_token_ids[pitch_field_index]
+        )
+        token_ids = token_ids[non_special_token_mask]
+
         token_ids[:, pitch_field_index] += pitch_shift
         # Adjust the positions that are out of range
         too_low_mask = token_ids[:, pitch_field_index] < 0

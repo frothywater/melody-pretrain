@@ -11,7 +11,10 @@ from tqdm import tqdm
 from melody_pretrain.tokenizer import MIDITokenizer
 
 
-def filter_ngrams(ngrams: np.ndarray, length: Optional[int], top_p: Optional[float]) -> np.ndarray:
+def get_ngrams(ngram_file: str, length: Optional[int], top_p: Optional[float]) -> np.ndarray:
+    ngrams = np.load(ngram_file)
+    
+    # filter ngrams
     if length is not None:
         ngrams = ngrams[ngrams["length"] <= length]
     if top_p is not None:
@@ -31,26 +34,6 @@ def filter_ngrams(ngrams: np.ndarray, length: Optional[int], top_p: Optional[flo
     return ngrams
 
 
-def adapt_for_special_tokens_(ngrams: np.ndarray, num_tokens: int):
-    # offset by 1 because of <BOS> token
-    ngrams["start"] += 1
-    ngrams["end"] += 1
-    # move any ngrams on the front backward to the <BOS> token
-    ngrams["start"][ngrams["start"] == 1] = 0
-    # move any ngrams on the end forward to the <EOS> token
-    ngrams["end"][ngrams["end"] == num_tokens - 1] = num_tokens
-
-
-def get_ngrams(
-    ngram_file: str, length: Optional[int], top_p: Optional[float], has_bos: bool, num_tokens: int
-) -> np.ndarray:
-    ngrams = np.load(ngram_file)
-    ngrams = filter_ngrams(ngrams, length, top_p)
-    if has_bos:
-        adapt_for_special_tokens_(ngrams, num_tokens)
-    return ngrams
-
-
 def prepare_data_job(
     midi_file: str,
     mixed_ngram_file: Optional[str],
@@ -64,17 +47,15 @@ def prepare_data_job(
 ):
     """Prepare data for a single midi file. Return the length of the encoded data."""
     midi = MidiFile(midi_file)
-    data, bar_spans = tokenizer.encode(midi, return_bar_spans=True, include_empty_bar=include_empty_bar)
-    results = {"data": data, "bar_spans": bar_spans}
+    data, note_map, bar_spans = tokenizer.encode(midi, return_bar_spans=True, include_empty_bar=include_empty_bar)
+    results = {"data": data, "note_map": note_map, "bar_spans": bar_spans}
 
-    has_bos = np.all(data[0] == tokenizer.bos_token_ids)
-    num_tokens = len(data)
     if mixed_ngram_file:
-        results["ngrams"] = get_ngrams(mixed_ngram_file, ngram_length, ngram_top_p, has_bos, num_tokens)
+        results["ngrams"] = get_ngrams(mixed_ngram_file, ngram_length, ngram_top_p)
     if pitch_ngram_file:
-        results["pitch_ngrams"] = get_ngrams(pitch_ngram_file, ngram_length, ngram_top_p, has_bos, num_tokens)
+        results["pitch_ngrams"] = get_ngrams(pitch_ngram_file, ngram_length, ngram_top_p)
     if rhythm_ngram_file:
-        results["rhythm_ngrams"] = get_ngrams(rhythm_ngram_file, ngram_length, ngram_top_p, has_bos, num_tokens)
+        results["rhythm_ngrams"] = get_ngrams(rhythm_ngram_file, ngram_length, ngram_top_p)
 
     os.makedirs(os.path.dirname(dest_path), exist_ok=True)
     np.savez(dest_path, **results)
