@@ -10,7 +10,6 @@ from torch.utils.data import DataLoader, Dataset
 from .tokenizer import MIDITokenizer
 
 ngram_ids_ignore_index = -100
-span_indices_padding_index = 0
 
 AttentionKind = Union[Literal["full"], Literal["causal"], Literal["prefix"]]
 
@@ -66,9 +65,6 @@ class DataBatch(NamedTuple):
     source_lengths: Optional[List[int]] = None
 
     filenames: Optional[List[str]] = None
-
-    # Used for permutated span prediction
-    span_indices: Optional[torch.Tensor] = None
 
 
 class Masking:
@@ -892,6 +888,7 @@ class DataCollatorForInfilling(DataCollator):
         self.span_independent_infilling = span_independent_infilling
 
         self.whole_seq_length = masking.get_estimated_infilling_seq_length(seq_len)
+        print("estimated whole sequence length:", self.whole_seq_length)
 
     def setup_tokenizer(self, tokenizer: MIDITokenizer):
         super().setup_tokenizer(tokenizer)
@@ -972,16 +969,6 @@ class DataCollatorForInfilling(DataCollator):
         )
         return input, label
 
-    def _get_span_indices(
-        self, mask_positions: List[int], sep_positions: List[int], source_length: int, seq_len: int
-    ) -> torch.Tensor:
-        span_indices = np.ones(seq_len, dtype=np.int64) * span_indices_padding_index
-        assert len(mask_positions) == len(sep_positions), "mask_positions and sep_positions should have the same length"
-        for i, (mask_position, sep_position) in enumerate(zip(mask_positions, sep_positions)):
-            span_indices[mask_position] = i + 1
-            span_indices[sep_position + source_length] = i + 1
-        return torch.from_numpy(span_indices).long()
-
     def __call__(self, batch: List[DatasetItem]) -> DataBatch:
         data_list = [item.data for item in batch]
         extra_data_list = [item.extra_data for item in batch]
@@ -1029,20 +1016,6 @@ class DataCollatorForInfilling(DataCollator):
         label_ids = torch.from_numpy(np.stack(self.pad(labels, self.whole_seq_length), axis=0)).long()
         _, seq_len, _ = input_ids.shape
 
-        # span indices for advanced infilling
-        if self.span_independent_infilling or self.permutated_infilling:
-            span_indices = torch.stack(
-                [
-                    self._get_span_indices(mask_positions, sep_positions, source_length, seq_len)
-                    for mask_positions, sep_positions, source_length in zip(
-                        mask_positions_list, sep_positions_list, source_lengths
-                    )
-                ],
-                dim=0,
-            )
-        else:
-            span_indices = None
-
         filenames = [item.filename for item in batch]
         return DataBatch(
             input_ids,
@@ -1051,7 +1024,6 @@ class DataCollatorForInfilling(DataCollator):
             lengths=input_lengths,
             source_lengths=source_lengths,
             ngram_types=ngram_types,
-            span_indices=span_indices,
             filenames=filenames,
         )
 
@@ -1078,6 +1050,7 @@ class DataCollatorForRecovery(DataCollator):
             + self.random_mask_ratio * masking.get_estimated_num_noise_spans(seq_len)
             + self.random_replace_ratio * (seq_len * 2 + 1)
         )
+        print("estimated whole sequence length:", self.whole_seq_length)
 
     def setup_tokenizer(self, tokenizer: MIDITokenizer):
         super().setup_tokenizer(tokenizer)

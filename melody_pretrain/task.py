@@ -43,9 +43,9 @@ class TrainingTask:
 class LanguageModelingTask(TrainingTask):
     def __init__(
         self,
+        seq_len: int,
         task_name: str = "clm",
         weight: float = 1.0,
-        seq_len: int = 256,
         random_crop: bool = True,
         padding_only: bool = False,
     ):
@@ -67,13 +67,13 @@ class LanguageModelingTask(TrainingTask):
 class InfillingTask(TrainingTask):
     def __init__(
         self,
+        seq_len: int,
         task_name: str = "infilling",
         kind: Union[str, List[str]] = "span",
         weight: float = 1.0,
         probabilities: Optional[List[float]] = None,
         corruption_rate: float = 0.15,
         mean_span_length: int = 5,
-        seq_len: int = 256,
         random_crop: bool = True,
         permutated_infilling: bool = False,
         span_independent_infilling: bool = False,
@@ -153,13 +153,13 @@ class NgramClassificationTask(TrainingTask):
 class RewritingTask(TrainingTask):
     def __init__(
         self,
+        seq_len: int,
         task_name: str = "rewriting",
         kind: Union[str, List[str]] = "span",
         weight: float = 1.0,
         probabilities: Optional[List[float]] = None,
         corruption_rate: float = 0.15,
         mean_span_length: int = 5,
-        seq_len: int = 256,
         random_crop: bool = True,
         generator_size_factor: int = 2,
         sampling_temperature: float = 1.0,
@@ -276,13 +276,13 @@ class RewritingTask(TrainingTask):
 class RecoveryTask(TrainingTask):
     def __init__(
         self,
+        seq_len: int,
         task_name: str = "recovery",
         kind: Union[str, List[str]] = "span",
         weight: float = 1.0,
         probabilities: Optional[List[float]] = None,
         corruption_rate: float = 0.15,
         mean_span_length: int = 5,
-        seq_len: int = 256,
         random_crop: bool = True,
         random_mask_ratio: float = 0,
         random_replace_ratio: float = 0,

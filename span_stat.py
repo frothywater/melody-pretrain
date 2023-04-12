@@ -55,7 +55,7 @@ def get_noise_ngrams(ngrams: np.ndarray, num_tokens: int, corruption_rate: float
     return noise_rate, mean_ngram_length
 
 
-def get_sample_rate_job(filename: str, corruption_rate: float, max_length: int = 256):
+def get_sample_rate_job(filename: str, corruption_rate: float, max_length: int = 512):
     file = np.load(filename)
     data = file["data"]
     bar_spans = file["bar_spans"]

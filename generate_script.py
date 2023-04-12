@@ -110,9 +110,9 @@ def get_model_script(
 
     lines = [
         f"# {experiment_name}",
-        # get_command("pretrain", pretrain_dir),
+        get_command("pretrain", pretrain_dir),
         get_command("finetune_clm", finetune_clm_dir, pretrain_ckpt_path),
-        # get_command("finetune_infilling", finetune_infilling_dir, pretrain_ckpt_path),
+        get_command("finetune_infilling", finetune_infilling_dir, pretrain_ckpt_path),
         # get_command("test", finetune_clm_dir, finetune_clm_ckpt_path),
     ]
     predict_lines = [
@@ -136,8 +136,8 @@ def main():
 
     task = "recovery"
     # task = "infilling"
-    # kinds = ["ngram-multi"]
-    kinds = ["ngram-multi", "single", "bar", "span"]
+    kinds = ["ngram-multi"]
+    # kinds = ["ngram-multi", "single", "bar", "span"]
     corruption_rates = [0.8]
     # corruption_rates = [0.9, 0.8, 0.7, 0.6, 0.5]
     for corruption_rate in corruption_rates:
@@ -145,7 +145,7 @@ def main():
             experiment_name = f"{kind}_{int(corruption_rate * 100)}"
             config_path = f"{args.experiment_dir}/script/{experiment_name}.yaml"
 
-            config = get_pretrain_config(args.dataset_dir, task, kind, corruption_rate, seq_len=256)
+            config = get_pretrain_config(args.dataset_dir, task, kind, corruption_rate, seq_len=512)
             with open(config_path, "w") as f:
                 yaml.dump(config, f)
 

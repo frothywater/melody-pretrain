@@ -8,7 +8,7 @@ import torch.nn.functional as F
 from lightning.pytorch.callbacks import BasePredictionWriter
 
 from .dataset import DataBatch
-from .module import CompoundTokenFuser, SpanPositionalEncoding
+from .module import CompoundTokenFuser, PositionalEncoding
 from .task import TrainingTask
 from .tokenizer import MIDITokenizer
 from .utils import top_k_sample
@@ -30,7 +30,7 @@ class MelodyModel(pl.LightningModule):
         num_layers: int,
         num_heads: int,
         dropout: float,
-        use_span_positional_encoding: bool = False,
+        use_positional_encoding: bool = False,
         **kwargs,
     ) -> None:
         super().__init__()
@@ -39,6 +39,7 @@ class MelodyModel(pl.LightningModule):
         if not os.path.exists(tokenizer_config_path):
             raise ValueError(f"Tokenizer config file not found: {tokenizer_config_path}")
         self.tokenizer = MIDITokenizer.from_config(tokenizer_config_path)
+        print(self.tokenizer)
 
         self.num_features = len(self.tokenizer.field_names)
 
@@ -50,6 +51,11 @@ class MelodyModel(pl.LightningModule):
         self.dropout = dropout
 
         self.fuser = CompoundTokenFuser(self.tokenizer, embedding_dim, model_dim)
+        
+        self.use_positional_encoding = use_positional_encoding
+        if use_positional_encoding:
+            self.positional_encoding = PositionalEncoding(model_dim)
+        
         self.transformer_encoder = nn.TransformerEncoder(
             nn.TransformerEncoderLayer(
                 d_model=model_dim,
@@ -62,16 +68,12 @@ class MelodyModel(pl.LightningModule):
             num_layers=num_layers,
         )
 
-        self.use_span_positional_encoding = use_span_positional_encoding
-        if use_span_positional_encoding:
-            self.span_positional_encoding = SpanPositionalEncoding(model_dim)
-
     def _create_causal_attention_mask(self, length: int) -> torch.Tensor:
         return torch.triu(torch.ones((length, length), dtype=torch.bool, device=self.device), diagonal=1)
 
     def _get_causal_attention_mask(self, length: int) -> torch.Tensor:
         if not hasattr(self, "causal_attention_mask"):
-            self.causal_attention_mask = self._create_causal_attention_mask(length=256)
+            self.causal_attention_mask = self._create_causal_attention_mask(length=1024)
         assert length <= self.causal_attention_mask.shape[0]
         return self.causal_attention_mask[:length, :length]
 
@@ -92,8 +94,8 @@ class MelodyModel(pl.LightningModule):
 
     def _get_prefix_attention_mask(self, source_length: int, length: int) -> torch.Tensor:
         if not hasattr(self, "prefix_attention_mask"):
-            self.prefix_attention_mask = self._create_prefix_attention_mask(source_length=256, length=768)
-            self.prefix_source_length = 256
+            self.prefix_attention_mask = self._create_prefix_attention_mask(source_length=512, length=1536)
+            self.prefix_source_length = 512
 
         assert source_length <= self.prefix_source_length and length <= self.prefix_attention_mask.shape[0]
         start = self.prefix_source_length - source_length
@@ -132,8 +134,8 @@ class MelodyModel(pl.LightningModule):
             )
 
         x = self.fuser(batch.input_ids)
-        if self.use_span_positional_encoding and batch.span_indices is not None:
-            x += self.span_positional_encoding(batch.span_indices)
+        if self.use_positional_encoding:
+            x = self.positional_encoding(x)
         x = self.transformer_encoder(x, src_key_padding_mask=padding_mask, mask=attention_mask)
         decoded = self.fuser.decode(x)
         if return_outputs:
@@ -179,7 +181,7 @@ class MelodyPretrainModel(MelodyModel):
         warmup_percent: float,
         fixed_lr: bool = False,
         # Training configuration
-        use_span_positional_encoding: bool = False,
+        use_positional_encoding: bool = False,
         **kwargs,
     ) -> None:
         super().__init__(
@@ -190,7 +192,7 @@ class MelodyPretrainModel(MelodyModel):
             num_layers=num_layers,
             num_heads=num_heads,
             dropout=dropout,
-            use_span_positional_encoding=use_span_positional_encoding,
+            use_positional_encoding=use_positional_encoding,
         )
 
         self.lr = lr
@@ -343,7 +345,7 @@ class MelodyCompletionModel(MelodyModel):
         prediction_bar_length: int,
         temperature: float,
         top_k: int,
-        max_length: int = 256,
+        max_length: int = 512,
         **kwargs,
     ) -> None:
         super().__init__(
@@ -443,7 +445,7 @@ class MelodyInfillingModel(MelodyModel):
         num_middle_bars: int,
         temperature: float,
         top_k: int,
-        max_length: int = 256,
+        max_length: int = 512,
         **kwargs,
     ) -> None:
         super().__init__(

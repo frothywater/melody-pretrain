@@ -1,9 +1,9 @@
+import math
 from typing import Dict, List
 
 import torch
 import torch.nn as nn
 
-from .dataset import span_indices_padding_index
 from .tokenizer import MIDITokenizer
 
 
@@ -18,7 +18,7 @@ class CompoundTokenFuser(nn.Module):
         self.total_field_size = sum(self.field_sizes)
 
         self.model_dim = model_dim
-        self.total_embedding_dim = sum(embedding_dim.values())
+        self.total_embedding_dim = sum(embedding_dim[field_name] for field_name in tokenizer.field_names)
 
         self.embeddings = nn.ModuleList(
             [
@@ -60,20 +60,29 @@ class CompoundTokenFuser(nn.Module):
         return torch.split(embeddings, self.field_sizes, dim=2)
 
 
-class SpanPositionalEncoding(nn.Module):
-    """Learnable positional encoding added on [MASK] and [SEP] tokens for advanced span prediction."""
-
-    def __init__(self, model_dim: int, max_length: int = 128) -> None:
+class PositionalEncoding(nn.Module):
+    """Positional encoding for the transformer."""
+    
+    def __init__(self, model_dim: int, max_seq_len: int = 2048) -> None:
         super().__init__()
         self.model_dim = model_dim
-        self.max_length = max_length
+        self.max_seq_len = max_seq_len
+        self.register_buffer("positional_encoding", self._get_positional_encoding())
 
-        self.positional_encoding = nn.Embedding(max_length, model_dim, padding_idx=span_indices_padding_index)
+    def _get_positional_encoding(self) -> torch.Tensor:
+        positional_encoding = torch.zeros(self.max_seq_len, self.model_dim)
+        position = torch.arange(0, self.max_seq_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, self.model_dim, 2).float() * (-math.log(10000.0) / self.model_dim))
+        positional_encoding[:, 0::2] = torch.sin(position * div_term)
+        positional_encoding[:, 1::2] = torch.cos(position * div_term)
+        return positional_encoding
 
-    def forward(self, span_indices: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Args:
-            span_indices: (batch_size, seq_len)
+            x: (batch_size, seq_len, model_dim)
         Returns:
-            span_encoding: (batch_size, seq_len, model_dim)
+            x: (batch_size, seq_len, model_dim)
         """
-        return self.positional_encoding(span_indices)
+        _, seq_len, _ = x.shape
+        x = x + self.positional_encoding[:seq_len].unsqueeze(0)
+        return x
