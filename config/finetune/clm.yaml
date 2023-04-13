@@ -2,7 +2,7 @@
 trainer:
   max_steps: -1
   max_epochs: 50
-  devices: "1,"
+  devices: 2
   accumulate_grad_batches: 1
   callbacks:
     - class_path: LearningRateMonitor
@@ -22,6 +22,9 @@ model:
   fixed_lr: True
   dataset_dir: experiment/dataset/wikifonia
 data:
-  batch_size: 16
+  batch_size: 8
   dataset_dir: experiment/dataset/wikifonia
-task: LanguageModelingTask
+task:
+  class_path: LanguageModelingTask
+  init_args:
+    seq_len: 512

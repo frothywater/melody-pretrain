@@ -2,7 +2,7 @@
 trainer:
   max_steps: -1
   max_epochs: 50
-  devices: "1,"
+  devices: 2
   accumulate_grad_batches: 1
   callbacks:
     - class_path: LearningRateMonitor
@@ -22,10 +22,11 @@ model:
   fixed_lr: True
   dataset_dir: experiment/dataset/wikifonia
 data:
-  batch_size: 16
+  batch_size: 8
   dataset_dir: experiment/dataset/wikifonia
   load_bar_data: true
 task:
   class_path: InfillingTask
   init_args:
+    seq_len: 512
     kind: fixed_bar

@@ -17,13 +17,29 @@ python lexicon.py prepare --length 12 --ngram_kind bar_onset --ngram_dir experim
 ### 2 Prepare dataset
 (Keep tokenizer configs the same between pretrain and finetune stages.)
 ```bash
-python prepare_data.py --granularity 64 --max_bar 128 --pitch_range 0 128 --ngram_length 12 --ngram_top_p 0.3 \
+python prepare_data.py --kind octuple --granularity 64 --max_bar 128 --pitch_range 0 128 --ngram_length 12 --ngram_top_p 0.3 \
 --midi_dir ../dataset/melodynet --dataset_dir experiment/dataset/melodynet \
 --pitch_ngram_dir experiment/dataset/melodynet/ngram/label_pitch \
 --rhythm_ngram_dir experiment/dataset/melodynet/ngram/label_rhythm
 
-python prepare_data.py --granularity 64 --max_bar 128 --pitch_range 0 128 --include_empty_bar \
+python prepare_data.py --kind octuple --granularity 64 --max_bar 128 --pitch_range 0 128 --include_empty_bar \
 --midi_dir ../dataset/wikifonia --dataset_dir experiment/dataset/wikifonia
+
+python prepare_data.py --kind cp --granularity 64 --max_bar 128 --pitch_range 0 128 --ngram_length 12 --ngram_top_p 0.3 \
+--midi_dir ../dataset/melodynet --dataset_dir experiment/dataset/melodynet_cp \
+--pitch_ngram_dir experiment/dataset/melodynet/ngram/label_pitch \
+--rhythm_ngram_dir experiment/dataset/melodynet/ngram/label_rhythm
+
+python prepare_data.py --kind cp --granularity 64 --max_bar 128 --pitch_range 0 128 --include_empty_bar \
+--midi_dir ../dataset/wikifonia --dataset_dir experiment/dataset/wikifonia_cp
+
+python prepare_data.py --kind remi --granularity 64 --max_bar 128 --pitch_range 0 128 --ngram_length 12 --ngram_top_p 0.3 \
+--midi_dir ../dataset/melodynet --dataset_dir experiment/dataset/melodynet_remi \
+--pitch_ngram_dir experiment/dataset/melodynet/ngram/label_pitch \
+--rhythm_ngram_dir experiment/dataset/melodynet/ngram/label_rhythm
+
+python prepare_data.py --kind remi --granularity 64 --max_bar 128 --pitch_range 0 128 --include_empty_bar \
+--midi_dir ../dataset/wikifonia --dataset_dir experiment/dataset/wikifonia_remi
 ```
 
 ### 3 Pretrain
@@ -32,8 +48,8 @@ python generate_script.py --dataset_dir experiment/dataset/melodynet --experimen
 experiment/ablation_mask/script/run.sh
 
 experiment/ablation_mask/script/generate.sh
-python plot_loss.py --experiment_dir experiment/ablation_mask_step
-python compute_metric.py --experiment_dir experiment/ablation_mask --dataset_dir experiment/dataset/wikifonia
+python plot_loss.py --experiment_dir experiment/ablation_mask
+python compute_metric.py --experiment_dir experiment/ablation_repr --dataset_dir experiment/dataset/wikifonia
 python plot_metric.py --experiment_dir experiment/ablation_mask
 ```
 
