@@ -11,7 +11,7 @@ from .dataset import DataBatch
 from .module import CompoundTokenFuser, PositionalEncoding
 from .task import TrainingTask
 from .tokenizer import MIDITokenizer
-from .utils import top_k_sample
+from .utils import top_k_top_p_sample
 
 DataBatchDict = Dict[str, DataBatch]
 
@@ -407,7 +407,9 @@ class MelodyCompletionModel(MelodyModel):
             sampled_tokens = []
             for logit in logits:
                 # Decode according to the sampling strategy
-                sampled_token = top_k_sample(logit[0, -1, :], k=self.top_k, t=self.temperature)
+                sampled_token = top_k_top_p_sample(
+                    logit[:, -1, :], top_k=self.top_k, top_p=self.top_p, temperature=self.temperature
+                )[0]
                 sampled_tokens.append(sampled_token)
             sampled_tokens = torch.cat(sampled_tokens, dim=-1)
 
@@ -494,7 +496,9 @@ class MelodyInfillingModel(MelodyModel):
             sampled_tokens = []
             for logit in logits:
                 # Decode according to the sampling strategy
-                sampled_token = top_k_sample(logit[0, -1, :], k=self.top_k, t=self.temperature)
+                sampled_token = top_k_top_p_sample(
+                    logit[:, -1, :], top_k=self.top_k, top_p=self.top_p, temperature=self.temperature
+                )[0]
                 sampled_tokens.append(sampled_token)
             sampled_tokens = torch.cat(sampled_tokens, dim=-1)
 
