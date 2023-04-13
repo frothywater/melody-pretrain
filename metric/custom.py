@@ -23,7 +23,7 @@ def get_distinct_ngram_percentage(midi_file: str, n_range: Tuple[int, int], max_
             ngrams.add(ngram)
     return len(ngrams) / len(notes)
 
-def get_bar_pair_similarity(midi_file: str, max_bar_interval: int = 40):
+def get_bar_pair_similarity(midi_file: str, max_bar_interval: int = 31):
     """Museformer"""
     midi = MidiFile(midi_file)
     

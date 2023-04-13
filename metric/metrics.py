@@ -165,16 +165,19 @@ def compute_all_metrics_for_models(test_files: List[str], generated_files: Dict[
     # collect results
     num_metrics = len(all_metric_names)
     num_models = len(generated_files)
-    test_metrics_list = results[:num_metrics]
+    test_metrics = results[:num_metrics]
     generated_metrics_list = [results[num_metrics * (i + 1) : num_metrics * (i + 2)] for i in range(num_models)]
 
     # compute mean
+    test_mean_list = []
+    for metric_name in absolute_metric_names:
+        i = all_metric_names.index(metric_name)
+        test_mean_list.append(test_metrics[i].mean())
     mean_list = []
     for generated_metrics in generated_metrics_list:
         for metric_name in absolute_metric_names:
             i = all_metric_names.index(metric_name)
             mean_list.append(generated_metrics[i].mean())
-    test_mean = [test_metrics.mean() for test_metrics in test_metrics_list]
     mean_list = np.array(mean_list).reshape(num_models, len(absolute_metric_names))
 
     # compute OA
@@ -182,7 +185,7 @@ def compute_all_metrics_for_models(test_files: List[str], generated_files: Dict[
     for generated_metrics in generated_metrics_list:
         for metric_name in oa_metric_names:
             i = all_metric_names.index(metric_name)
-            args_list.append((generated_metrics[i], test_metrics_list[i]))
+            args_list.append((generated_metrics[i], test_metrics[i]))
     with Pool() as pool:
         results = pool.starmap(compute_oa, args_list)
     oa_list = np.array(results).reshape(num_models, len(oa_metric_names))
@@ -192,13 +195,13 @@ def compute_all_metrics_for_models(test_files: List[str], generated_files: Dict[
     for model_index, generated_metrics in enumerate(generated_metrics_list):
         for metric_name in average_error_metric_names:
             i = all_metric_names.index(metric_name)
-            error_list.append(compute_average_error(generated_metrics[i], test_metrics_list[i]))
+            error_list.append(compute_average_error(generated_metrics[i], test_metrics[i]))
     error_list = np.array(error_list).reshape(num_models, len(average_error_metric_names))
     
     # gather as DataFrame
     data = []
     for metric_index, metric_name in enumerate(absolute_metric_names):
-        data.append({"model": "test", "metric": metric_name, "kind": "mean", "value": test_mean[metric_index]})
+        data.append({"model": "test", "metric": metric_name, "kind": "mean", "value": test_mean_list[metric_index]})
     for model_index, generated_dir in enumerate(generated_files):
         for metric_index, metric_name in enumerate(absolute_metric_names):
             data.append({"model": generated_dir, "metric": metric_name, "kind": "mean", "value": mean_list[model_index, metric_index]})
