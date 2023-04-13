@@ -9,8 +9,6 @@ from torch.utils.data import DataLoader, Dataset
 
 from .tokenizer import MIDITokenizer
 
-ngram_ids_ignore_index = -100
-
 AttentionKind = Union[Literal["full"], Literal["causal"], Literal["prefix"]]
 
 
@@ -980,7 +978,6 @@ class DataCollatorForInfilling(DataCollator):
         # collect all the data, and genereate the inputs and labels
         inputs, labels = [], []
         source_lengths, input_lengths = [], []
-        ngram_types = []
         mask_positions_list, sep_positions_list = [], []
         for data, note_map, extra_data, offset in zip(data_list, note_maps, extra_data_list, offsets):
             infilling_data = self.masking.mask_for_infilling(data, note_map, offset=offset, **extra_data)
@@ -1005,7 +1002,6 @@ class DataCollatorForInfilling(DataCollator):
             input_lengths.append(len(input))
             mask_positions_list.append(mask_positions)
             sep_positions_list.append(sep_positions)
-            ngram_types.append(infilling_data.ngram_type)
 
         # pad
         max_length = max(input_lengths)
@@ -1023,7 +1019,6 @@ class DataCollatorForInfilling(DataCollator):
             attention_kind="prefix",
             lengths=input_lengths,
             source_lengths=source_lengths,
-            ngram_types=ngram_types,
             filenames=filenames,
         )
 

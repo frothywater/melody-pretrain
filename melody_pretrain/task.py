@@ -19,7 +19,6 @@ from .dataset import (
     RandomNgramMasking,
     RandomSpanMasking,
     SingleSpanMasking,
-    ngram_ids_ignore_index,
 )
 from .module import CompoundTokenFuser
 from .utils import gumbel_sample
@@ -107,47 +106,6 @@ class InfillingTask(TrainingTask):
     def __call__(self, model, batch: DataBatch, **kwargs) -> torch.Tensor:
         logits = model(batch)
         return model._get_loss(logits, batch.label_ids)
-
-
-class NgramClassificationTask(TrainingTask):
-    def __init__(self, task_name: str = "ngram_classification", weight: float = 1.0):
-        super().__init__(task_name, weight)
-
-    def register_extra_modules(self, model) -> None:
-        lexicon_path = os.path.join(model.dataset_dir, "ngram_data", "lexicon.pkl")
-        # TODO: get lexicon size
-        pitch_size, rhythm_size = 0, 0
-        model.pitch_ngram_head = nn.Linear(model.model_dim, pitch_size)
-        model.rhythm_ngram_head = nn.Linear(model.model_dim, rhythm_size)
-
-    def __call__(self, model, batch: DataBatch, model_outputs: Optional[torch.Tensor] = None, **kwargs) -> torch.Tensor:
-        batch_size, seq_len, _ = model_outputs.shape
-        assert len(batch.ngram_types) == batch_size, "ngram_types must be a list of length batch_size"
-        assert batch.ngram_ids.shape == (batch_size, seq_len), "label_ids must be of shape (batch_size, seq_len)"
-        pitch_logits = model.pitch_ngram_head(model_outputs)
-        rhythm_logits = model.rhythm_ngram_head(model_outputs)
-
-        pitch_indices = [i for i, ngram_type in enumerate(batch.ngram_types) if ngram_type == "pitch"]
-        rhythm_indices = [i for i, ngram_type in enumerate(batch.ngram_types) if ngram_type == "rhythm"]
-        # extract corresponding ngram types
-        pitch_logits = pitch_logits[pitch_indices]
-        pitch_label_ids = batch.ngram_ids[pitch_indices]
-        rhythm_logits = rhythm_logits[rhythm_indices]
-        rhythm_label_ids = batch.ngram_ids[rhythm_indices]
-
-        # (batch_size, seq_len, vocab_size) -> (batch_size, vocab_size, seq_len)
-        # use reduction="sum" to avoid averaging over the batch
-        pitch_loss = F.cross_entropy(
-            pitch_logits.transpose(1, 2), pitch_label_ids, reduction="sum", ignore_index=ngram_ids_ignore_index
-        )
-        rhythm_loss = F.cross_entropy(
-            rhythm_logits.transpose(1, 2), rhythm_label_ids, reduction="sum", ignore_index=ngram_ids_ignore_index
-        )
-        # average over the number of non-padding tokens
-        count = torch.count_nonzero(pitch_label_ids != ngram_ids_ignore_index) + torch.count_nonzero(
-            rhythm_label_ids != ngram_ids_ignore_index
-        )
-        return (pitch_loss + rhythm_loss) / count
 
 
 class RewritingTask(TrainingTask):
