@@ -391,22 +391,14 @@ class MelodyCompletionModel(MelodyModel):
             self.bos_token_tensor = self.bos_token_tensor.to(self.device)
             self.eos_token_tensor = self.eos_token_tensor.to(self.device)
 
-        prediction_bar_token_id = self.tokenizer.encoder["bar"][self.prediction_bar_length]
         if self.conditional_bar_length > 0:
             # Crop the input to the conditional bar length
-            conditional_bar_token_id = self.tokenizer.encoder["bar"][self.conditional_bar_length]
-
-            bar_data = input_ids[0, :, self.bar_field_index]
-            conditional_bar_test = torch.nonzero(
-                (bar_data >= conditional_bar_token_id) & (bar_data < self.bar_vocab_size)
-            )
-            assert len(conditional_bar_test) > 0, "No conditional bar token found in the input"
-            conditional_bar_index = conditional_bar_test[0, 0].item()
-            input_ids = input_ids[:, :conditional_bar_index, :]
+            raise NotImplementedError
         else:
             input_ids = self.bos_token_tensor.view(1, 1, -1)
 
         # Inference on a single sequence
+        tokens = []
         while input_ids.shape[1] < self.max_length:
             seq_len = input_ids.shape[1]
             attention_mask = self.attention_mask[:seq_len, :seq_len]
@@ -421,14 +413,14 @@ class MelodyCompletionModel(MelodyModel):
                 sampled_tokens.append(sampled_token)
             sampled_tokens = torch.cat(sampled_tokens, dim=-1)
 
-            # token = self.tokenizer.convert_id_to_token(sampled_tokens.cpu().numpy())
+            token = self.tokenizer.convert_id_to_token(sampled_tokens.cpu().numpy())
+            tokens.append(token)
             # print(token)
 
-            # until <EOS> token or the desired bar length is reached
-            sampled_bar = sampled_tokens[self.bar_field_index]
-            if torch.all(sampled_tokens == self.eos_token_tensor) or (
-                (sampled_bar >= prediction_bar_token_id) & (sampled_bar < self.bar_vocab_size)
-            ):
+            # until <EOS> token is generated or the predicted bar length is reached
+            bar_length = self.tokenizer.get_tokens_bar_length(tokens)
+            if torch.all(sampled_tokens == self.eos_token_tensor) or (bar_length >= self.prediction_bar_length):
+                # print("bar length:", bar_length)
                 break
 
             # Append the sampled token to the input
@@ -478,6 +470,7 @@ class MelodyInfillingModel(MelodyModel):
         self.max_length = max_length
 
         self.sep_token_tensor = torch.tensor(self.tokenizer.sep_token_ids, dtype=torch.long)
+        self.long_mask_token_tensor = torch.tensor(self.tokenizer.long_mask_token_ids, dtype=torch.long)
 
     def forward(self, input_ids: torch.Tensor, attn_mask: torch.Tensor) -> List[torch.Tensor]:
         x = self.fuser(input_ids)
@@ -492,16 +485,14 @@ class MelodyInfillingModel(MelodyModel):
         assert batch_size == 1, "Only support batch size of 1 for prediction for now"
         if self.sep_token_tensor.device != self.device:
             self.sep_token_tensor = self.sep_token_tensor.to(self.device)
+            self.long_mask_token_tensor = self.long_mask_token_tensor.to(self.device)
 
-        bar_field_index = self.tokenizer.field_indices["bar"]
-        bar_mask_token_id = self.tokenizer.long_mask_token_ids[bar_field_index]
-        bar_sep_token_id = self.tokenizer.sep_token_ids[bar_field_index]
-        mask_token_position = (input_ids[0, :, bar_field_index] == bar_mask_token_id).nonzero()[0].item()
-        future_bar_token_id = input_ids[0, mask_token_position + 1, bar_field_index]
+        mask_token_position = torch.all(input_ids[0, :] == self.long_mask_token_tensor, dim=1).nonzero()[0].item()
 
         # Add one seperator token to the end
         input_ids = torch.cat([input_ids, self.sep_token_tensor.unsqueeze(0).unsqueeze(0)], dim=1)
 
+        tokens = []
         while input_ids.shape[1] < self.max_length:
             seq_len = input_ids.shape[1]
             attention_mask = self._get_prefix_attention_mask(original_len, seq_len)
@@ -516,14 +507,12 @@ class MelodyInfillingModel(MelodyModel):
                 sampled_tokens.append(sampled_token)
             sampled_tokens = torch.cat(sampled_tokens, dim=-1)
 
-            # token = self.tokenizer.convert_id_to_token(sampled_tokens.cpu().numpy())
+            token = self.tokenizer.convert_id_to_token(sampled_tokens.cpu().numpy())
+            tokens.append(token)
             # print(token)
 
-            # until the model predicts a seperator token, or the desired bar length is reached
-            if (
-                sampled_tokens[bar_field_index] == bar_sep_token_id
-                or sampled_tokens[bar_field_index] >= future_bar_token_id
-            ):
+            # until <SEP> token is predicted
+            if torch.all(sampled_tokens == self.sep_token_tensor):
                 break
 
             # Append the sampled token to the input

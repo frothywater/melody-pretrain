@@ -182,6 +182,10 @@ class MIDITokenizer:
         """
         raise NotImplementedError
 
+    def get_tokens_bar_length(self, tokens: List[Token]) -> int:
+        """Get the bar length of the tokens."""
+        raise NotImplementedError
+
     def _get_tempo_changes(self, midi: MidiFile) -> List[TempoChange]:
         # sort and deduplicate tempo changes
         tempo_changes = midi.tempo_changes
@@ -316,9 +320,7 @@ class OctupleTokenizer(MIDITokenizer):
         pitch_field_index = self.field_indices["pitch"]
 
         # Only adjust non special tokens
-        non_special_token_mask = (token_ids[:, pitch_field_index] != self.bos_token_ids[pitch_field_index]) & (
-            token_ids[:, pitch_field_index] != self.eos_token_ids[pitch_field_index]
-        )
+        non_special_token_mask = token_ids[:, pitch_field_index] < self.pitch_range.stop
         token_ids = token_ids[non_special_token_mask]
 
         token_ids[:, pitch_field_index] += pitch_shift
@@ -327,6 +329,9 @@ class OctupleTokenizer(MIDITokenizer):
         too_high_mask = token_ids[:, pitch_field_index] >= self.pitch_range.stop
         token_ids[too_low_mask, pitch_field_index] += 12
         token_ids[too_high_mask, pitch_field_index] -= 12
+
+    def get_tokens_bar_length(self, tokens: List[Token]) -> int:
+        return max(token.bar for token in tokens if isinstance(token.bar, int))
 
 
 class CPTokenizer(MIDITokenizer):
@@ -431,9 +436,7 @@ class CPTokenizer(MIDITokenizer):
         pitch_field_index = self.field_indices["pitch"]
 
         # Only adjust non special tokens
-        non_special_token_mask = (token_ids[:, pitch_field_index] != self.bos_token_ids[pitch_field_index]) & (
-            token_ids[:, pitch_field_index] != self.eos_token_ids[pitch_field_index]
-        )
+        non_special_token_mask = token_ids[:, pitch_field_index] < self.pitch_range.stop
         token_ids = token_ids[non_special_token_mask]
 
         token_ids[:, pitch_field_index] += pitch_shift
@@ -442,6 +445,9 @@ class CPTokenizer(MIDITokenizer):
         too_high_mask = token_ids[:, pitch_field_index] >= self.pitch_range.stop
         token_ids[too_low_mask, pitch_field_index] += 12
         token_ids[too_high_mask, pitch_field_index] -= 12
+
+    def get_tokens_bar_length(self, tokens: List[Token]) -> int:
+        return sum(1 for token in tokens if token.family == "metrical" and token.metrical == "bar") - 1
 
 
 class RemiTokenizer(MIDITokenizer):
@@ -598,6 +604,9 @@ class RemiTokenizer(MIDITokenizer):
         # Adjust the positions that are out of range
         token_ids[token_ids < self.pitch_token_id_start] += 12
         token_ids[token_ids >= self.pitch_token_id_end] -= 12
+
+    def get_tokens_bar_length(self, tokens: List[Token]) -> int:
+        return sum(1 for token in tokens if token.remi == "bar") - 1
 
 
 if __name__ == "__main__":
