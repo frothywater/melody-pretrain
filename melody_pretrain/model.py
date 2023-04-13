@@ -51,11 +51,11 @@ class MelodyModel(pl.LightningModule):
         self.dropout = dropout
 
         self.fuser = CompoundTokenFuser(self.tokenizer, embedding_dim, model_dim)
-        
+
         self.use_positional_encoding = use_positional_encoding
         if use_positional_encoding:
             self.positional_encoding = PositionalEncoding(model_dim)
-        
+
         self.transformer_encoder = nn.TransformerEncoder(
             nn.TransformerEncoderLayer(
                 d_model=model_dim,
@@ -211,7 +211,9 @@ class MelodyPretrainModel(MelodyModel):
         if self.fixed_lr:
             return optimizer
         else:
-            total_steps = self.trainer.max_steps if self.trainer.max_steps > 0 else self.trainer.estimated_stepping_batches
+            total_steps = (
+                self.trainer.max_steps if self.trainer.max_steps > 0 else self.trainer.estimated_stepping_batches
+            )
             print(f"Total steps: {total_steps}")
             lr_scheduler = torch.optim.lr_scheduler.OneCycleLR(
                 optimizer,
@@ -274,6 +276,7 @@ class MelodyTestingModel(MelodyModel):
         # Testing hyperparameters
         max_seq_len: int,
         perplexity_stride: int,
+        use_positional_encoding: bool = False,
         **kwargs,
     ) -> None:
         super().__init__(
@@ -284,6 +287,7 @@ class MelodyTestingModel(MelodyModel):
             num_layers=num_layers,
             num_heads=num_heads,
             dropout=dropout,
+            use_positional_encoding=use_positional_encoding,
         )
 
         self.max_seq_len = max_seq_len
@@ -343,9 +347,11 @@ class MelodyCompletionModel(MelodyModel):
         # Inference hyperparameters
         conditional_bar_length: int,
         prediction_bar_length: int,
-        temperature: float,
-        top_k: int,
+        temperature: float = 1.0,
+        top_k: int = 0,
+        top_p: float = 1.0,
         max_length: int = 512,
+        use_positional_encoding: bool = False,
         **kwargs,
     ) -> None:
         super().__init__(
@@ -356,21 +362,23 @@ class MelodyCompletionModel(MelodyModel):
             num_layers=num_layers,
             num_heads=num_heads,
             dropout=dropout,
+            use_positional_encoding=use_positional_encoding,
         )
 
         self.conditional_bar_length = conditional_bar_length
         self.prediction_bar_length = prediction_bar_length
         self.temperature = temperature
         self.top_k = top_k
+        self.top_p = top_p
         self.max_length = max_length
-        self.bar_field_index = self.tokenizer.field_indices["bar"]
-        self.bar_vocab_size = self.tokenizer.vocab_sizes[self.bar_field_index]
         self.attention_mask = torch.triu(torch.ones((max_length, max_length), dtype=torch.bool), diagonal=1)
         self.bos_token_tensor = torch.tensor(self.tokenizer.bos_token_ids, dtype=torch.long)
         self.eos_token_tensor = torch.tensor(self.tokenizer.eos_token_ids, dtype=torch.long)
 
     def forward(self, input_ids: torch.Tensor, attn_mask: torch.Tensor) -> List[torch.Tensor]:
         x = self.fuser(input_ids)
+        if self.use_positional_encoding:
+            x = self.positional_encoding(x)
         x = self.transformer_encoder(x, mask=attn_mask)
         return self.fuser.decode(x)
 
@@ -445,9 +453,11 @@ class MelodyInfillingModel(MelodyModel):
         dropout: float,
         # Inference hyperparameters
         num_middle_bars: int,
-        temperature: float,
-        top_k: int,
+        temperature: float = 1.0,
+        top_k: int = 0,
+        top_p: float = 1.0,
         max_length: int = 512,
+        use_positional_encoding: bool = False,
         **kwargs,
     ) -> None:
         super().__init__(
@@ -458,17 +468,21 @@ class MelodyInfillingModel(MelodyModel):
             num_layers=num_layers,
             num_heads=num_heads,
             dropout=dropout,
+            use_positional_encoding=use_positional_encoding,
         )
 
         self.num_middle_bars = num_middle_bars
         self.temperature = temperature
         self.top_k = top_k
+        self.top_p = top_p
         self.max_length = max_length
 
         self.sep_token_tensor = torch.tensor(self.tokenizer.sep_token_ids, dtype=torch.long)
 
     def forward(self, input_ids: torch.Tensor, attn_mask: torch.Tensor) -> List[torch.Tensor]:
         x = self.fuser(input_ids)
+        if self.use_positional_encoding:
+            x = self.positional_encoding(x)
         x = self.transformer_encoder(x, mask=attn_mask)
         return self.fuser.decode(x)
 
