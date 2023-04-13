@@ -5,8 +5,9 @@ from typing import Dict, List, NamedTuple, Optional, Tuple, Union
 import numpy as np
 from miditoolkit import Instrument, MidiFile, Note, TempoChange
 
-AnyField = Union[int, str, None]
+AnyField = Union[int, str]
 pad_str = "<PAD>"
+none_str = "-"
 note_map_record_dtype = np.dtype([("start", np.int16), ("end", np.int16)])
 
 
@@ -293,7 +294,7 @@ class OctupleTokenizer(MIDITokenizer):
         current_tempo = self.default_tempo
         midi.tempo_changes = [TempoChange(tempo=current_tempo, time=0)]
         for token in tokens:
-            if any([field is None or field in self.special_token_str for field in token]):
+            if any([field in self.special_token_str for field in token]):
                 continue
             start = token.bar * self.ticks_per_bar + token.position
             end = token.bar * self.ticks_per_bar + token.position + token.duration
@@ -333,10 +334,10 @@ class CPTokenizer(MIDITokenizer):
 
     class Token(NamedTuple):
         family: AnyField
-        metrical: AnyField = None
-        tempo: AnyField = None
-        pitch: AnyField = None
-        duration: AnyField = None
+        metrical: AnyField = none_str
+        tempo: AnyField = none_str
+        pitch: AnyField = none_str
+        duration: AnyField = none_str
 
         def __str__(self) -> str:
             family = self.family if self.family != pad_str else ""
@@ -348,10 +349,10 @@ class CPTokenizer(MIDITokenizer):
 
     def define_vocabularies(self) -> None:
         self.vocabularies["family"] = ["note", "metrical"]
-        self.vocabularies["metrical"] = ["bar"] + self.position_bins
-        self.vocabularies["tempo"] = self.tempo_bins
-        self.vocabularies["pitch"] = list(self.pitch_range)
-        self.vocabularies["duration"] = self.duration_bins
+        self.vocabularies["metrical"] = ["bar"] + self.position_bins + [none_str]
+        self.vocabularies["tempo"] = self.tempo_bins + [none_str]
+        self.vocabularies["pitch"] = list(self.pitch_range) + [none_str]
+        self.vocabularies["duration"] = self.duration_bins + [none_str]
 
     def tokenize(self, midi: MidiFile) -> Tuple[List[Token], np.ndarray]:
         assert len(midi.instruments) == 1, "Only support single instrument midi file."
@@ -393,33 +394,28 @@ class CPTokenizer(MIDITokenizer):
         return tokens, note_map
 
     def detokenize(self, tokens: List[Token], velocity: int = 100) -> MidiFile:
+        def is_valid(field: str) -> bool:
+            return field != none_str and field not in self.special_token_str
+
         midi = MidiFile()
         notes = []
         current_bar, current_position = None, None
         current_tempo = self.default_tempo
         midi.tempo_changes = [TempoChange(tempo=current_tempo, time=0)]
         for token in tokens:
-            if token.family is None or token.family in self.special_token_str:
+            if not is_valid(token.family):
                 continue
 
             if token.family == "metrical":
                 if token.metrical == "bar":
                     current_bar = current_bar + 1 if current_bar is not None else 0
-                elif token.metrical is not None and token.metrical not in self.special_token_str:
+                elif is_valid(token.metrical):
                     current_position = current_bar * self.ticks_per_bar + token.metrical
                     # add tempo change if tempo changes
-                    if (
-                        token.tempo is not None
-                        and token.tempo not in self.special_token_str
-                        and token.tempo != current_tempo
-                    ):
+                    if is_valid(token.tempo) and token.tempo != current_tempo:
                         current_tempo = token.tempo
                         midi.tempo_changes.append(TempoChange(tempo=current_tempo, time=current_position))
-                else:
-                    raise ValueError(f"Invalid metrical token: {token}")
-            elif token.family == "note":
-                assert token.pitch is not None and token.pitch not in self.special_token_str
-                assert token.duration is not None and token.duration not in self.special_token_str
+            elif token.family == "note" and is_valid(token.pitch) and is_valid(token.duration):
                 note = Note(
                     velocity=velocity, pitch=token.pitch, start=current_position, end=current_position + token.duration
                 )
@@ -574,15 +570,16 @@ class RemiTokenizer(MIDITokenizer):
             elif remi_token.tempo is not None:
                 midi.tempo_changes.append(TempoChange(tempo=remi_token.tempo, time=current_position))
             elif remi_token.pitch is not None:
-                assert remi_token.pitch is not None
-                assert index + 1 < len(tokens), "Pitch token must be followed by duration token."
-                duration = self._RemiToken.from_token(tokens[index + 1]).duration
-                assert duration is not None, "Pitch token must be followed by duration token."
-                note = Note(
-                    velocity=velocity, pitch=remi_token.pitch, start=current_position, end=current_position + duration
-                )
-                notes.append(note)
-                index_to_skip_to = index + 2
+                if index + 1 < len(tokens) and self._RemiToken.from_token(tokens[index + 1]).duration is not None:
+                    duration = self._RemiToken.from_token(tokens[index + 1]).duration
+                    note = Note(
+                        velocity=velocity,
+                        pitch=remi_token.pitch,
+                        start=current_position,
+                        end=current_position + duration,
+                    )
+                    notes.append(note)
+                    index_to_skip_to = index + 2
 
         instrument = Instrument(program=0)
         instrument.notes.extend(notes)
@@ -605,7 +602,7 @@ class RemiTokenizer(MIDITokenizer):
 
 if __name__ == "__main__":
     # testing
-    tokenizer = RemiTokenizer()
+    tokenizer = CPTokenizer()
     print("field_names:", tokenizer.field_names)
     print("field_indices:", tokenizer.field_indices)
     print("field_sizes:", tokenizer.field_sizes)
