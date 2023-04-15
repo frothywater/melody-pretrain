@@ -680,7 +680,7 @@ class RandomNgramMasking(InfillingMasking):
         noise_ngram_spans, has_enough_noise_ngrams = self._get_random_noise_ngrams(seq_len, ngrams)
 
         if not has_enough_noise_ngrams:
-            return self.random_span_masking.mask_for_infilling(data)
+            return self.random_span_masking.mask_for_infilling(data, note_map)
 
         # Build masked data and target
         nonnoise_spans, noise_spans = [], []
