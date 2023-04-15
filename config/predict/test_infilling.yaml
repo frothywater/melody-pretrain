@@ -5,14 +5,14 @@ model:
   class_path: melody_pretrain.model.MelodyTestingModel
   init_args:
     dataset_dir: experiment/dataset/wikifonia
-    max_seq_len: 256
-    perplexity_stride: 64
 data:
   dataset_dir: experiment/dataset/wikifonia
   batch_size: 32
+  load_bar_data: true
   pitch_augumentation: false
 task:
-  class_path: LanguageModelingTask
+  class_path: InfillingTask
   init_args:
-    seq_len: 1024
+    seq_len: 256
+    kind: fixed_bar
     random_crop: false

@@ -73,7 +73,7 @@ class MelodyModel(pl.LightningModule):
 
     def _get_causal_attention_mask(self, length: int) -> torch.Tensor:
         if not hasattr(self, "causal_attention_mask"):
-            self.causal_attention_mask = self._create_causal_attention_mask(length=1024)
+            self.causal_attention_mask = self._create_causal_attention_mask(length=512)
         assert length <= self.causal_attention_mask.shape[0]
         return self.causal_attention_mask[:length, :length]
 
@@ -94,8 +94,8 @@ class MelodyModel(pl.LightningModule):
 
     def _get_prefix_attention_mask(self, source_length: int, length: int) -> torch.Tensor:
         if not hasattr(self, "prefix_attention_mask"):
-            self.prefix_attention_mask = self._create_prefix_attention_mask(source_length=512, length=1536)
-            self.prefix_source_length = 512
+            self.prefix_attention_mask = self._create_prefix_attention_mask(source_length=256, length=768)
+            self.prefix_source_length = 256
 
         assert source_length <= self.prefix_source_length and length <= self.prefix_attention_mask.shape[0]
         start = self.prefix_source_length - source_length
@@ -274,8 +274,8 @@ class MelodyTestingModel(MelodyModel):
         num_heads: int,
         dropout: float,
         # Testing hyperparameters
-        max_seq_len: int,
-        perplexity_stride: int,
+        max_seq_len: Optional[int] = None,
+        perplexity_stride: Optional[int] = None,
         use_positional_encoding: bool = False,
         **kwargs,
     ) -> None:
@@ -295,24 +295,30 @@ class MelodyTestingModel(MelodyModel):
 
         self.pad_token_tensor = torch.from_numpy(self.tokenizer.pad_token_ids).long()
 
-    def test_step(self, batch: DataBatch, batch_idx: int) -> torch.Tensor:
-        """Calculate strided fixed-length perplexity for CLM model.
-        Reference: https://huggingface.co/docs/transformers/perplexity
-        """
-        _, seq_len, _ = batch.input_ids.shape
+    def get_ppl_directly(self, batch: DataBatch) -> torch.Tensor:
+        logits = self(batch)
+        loss = self._get_loss(logits, batch.label_ids)
+        return torch.exp(loss)
+    
+    def get_ppl_strided(self, batch: DataBatch) -> torch.Tensor:
+        seq_len = max(batch.lengths)
         if self.pad_token_tensor.device != self.device:
             self.pad_token_tensor = self.pad_token_tensor.to(self.device)
-
+        
         nlls = []
+        valid_counts = []
         previous_end_index = 0
         for start_index in range(0, seq_len, self.perplexity_stride):
             end_index = min(start_index + self.max_seq_len, seq_len)
             target_length = end_index - previous_end_index
+            if target_length <= 0:
+                break
 
             # Mask out context tokens for labels
             new_label_ids = batch.label_ids[:, start_index:end_index, :].clone()
             new_label_ids[:, :-target_length] = self.pad_token_tensor
             new_lengths = [max(length - start_index, 0) for length in batch.lengths]
+            target_lengths = [max(min(target_length, length - previous_end_index), 0) for length in batch.lengths]
             new_batch = DataBatch(
                 input_ids=batch.input_ids[:, start_index:end_index, :],
                 label_ids=new_label_ids,
@@ -321,11 +327,26 @@ class MelodyTestingModel(MelodyModel):
             )
             logits = self(new_batch)
             loss = self._get_loss(logits, new_batch.label_ids)
-            neg_log_likelihood = loss * target_length
-            nlls.append(neg_log_likelihood)
+            
+            valid_count = sum(target_lengths)
+            negative_log_likelihood = loss * valid_count
+            nlls.append(negative_log_likelihood)
+            valid_counts.append(valid_count)
             previous_end_index = end_index
 
-        ppl = torch.exp(torch.stack(nlls).sum() / end_index)
+        return torch.exp(torch.stack(nlls).sum() / sum(valid_counts))
+
+    def test_step(self, batch: DataBatch, batch_idx: int) -> torch.Tensor:
+        """Calculate strided fixed-length perplexity.
+        Reference: https://huggingface.co/docs/transformers/perplexity
+        """
+        if batch.attention_kind == "prefix":
+            ppl = self.get_ppl_directly(batch)
+        elif batch.attention_kind == "causal":
+            ppl = self.get_ppl_strided(batch)
+        else:
+            raise ValueError(f"Unsupported attention kind: {batch.attention_kind}")
+            
         self.log("perplexity", ppl, sync_dist=True)
         return ppl
 
