@@ -19,7 +19,7 @@ trainer:
         patience: 5
 model:
   lr: 1e-5
-  fixed_lr: True
+  fixed_lr: true
   dataset_dir: experiment/dataset/wikifonia
 data:
   batch_size: 8
@@ -27,4 +27,4 @@ data:
 task:
   class_path: LanguageModelingTask
   init_args:
-    seq_len: 512
+    seq_len: 256

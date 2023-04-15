@@ -28,8 +28,8 @@ def get_pretrain_config(dataset_dir: str, task: str, kind: str, corruption_rate:
         }
         if weight is not None:
             result["init_args"]["weight"] = weight
-        if task == "recovery":
-            result["init_args"]["random_mask_ratio"] = 0.1
+        # if task == "recovery":
+        # result["init_args"]["random_mask_ratio"] = 0.1
         return result
 
     if kind == "span":
@@ -50,6 +50,11 @@ def get_pretrain_config(dataset_dir: str, task: str, kind: str, corruption_rate:
         config["data"]["load_ngram_data"] = True
         config["task"].append(get_task_config("ngram"))
         config["task"].append(get_task_config("single"))
+    elif kind == "ngram-multi-single":
+        config["data"]["load_ngram_data"] = True
+        config["task"].append(get_task_config("pitch_ngram"))
+        config["task"].append(get_task_config("rhythm_ngram"))
+        config["task"].append(get_task_config("single"))
     else:
         raise ValueError(f"Unknown kind: {kind}")
 
@@ -60,6 +65,7 @@ def get_model_script(
     experiment_name: str,
     config_path: str,
     experiment_dir: str,
+    model_size: str = "base",
     pretrain_steps: int = 100000,
     ckpt_path: str = "lightning_logs/version_0/checkpoints",
 ):
@@ -73,9 +79,12 @@ def get_model_script(
         elif stage == "finetune_infilling":
             subcommand = "fit"
             config_path_ = "config/finetune/infilling.yaml"
-        elif stage == "test":
+        elif stage == "test_clm":
             subcommand = "test"
             config_path_ = "config/predict/test_clm.yaml"
+        elif stage == "test_infilling":
+            subcommand = "test"
+            config_path_ = "config/predict/test_infilling.yaml"
         elif stage == "generate_clm":
             subcommand = "predict"
             config_path_ = "config/predict/generate_clm.yaml"
@@ -88,11 +97,11 @@ def get_model_script(
         result = f"python main.py {subcommand}"
         if "generate" not in stage:
             result += " --config config/trainer.yaml"
-        result += " --config config/model/base.yaml"
+        result += f" --config config/model/{model_size}.yaml"
         result += f" --config {config_path_}"
         result += f" --trainer.default_root_dir {model_dir}"
         if ckpt_path is not None:
-            ckpt_key = "ckpt_path" if stage == "test" or "generate" in stage else "load_from_checkpoint"
+            ckpt_key = "ckpt_path" if stage.startswith("test") or "generate" in stage else "load_from_checkpoint"
             result += f" --{ckpt_key} {ckpt_path}"
         if "generate" in stage:
             subdir = stage.split("_")[1]
@@ -113,7 +122,8 @@ def get_model_script(
         get_command("pretrain", pretrain_dir),
         get_command("finetune_clm", finetune_clm_dir, pretrain_ckpt_path),
         get_command("finetune_infilling", finetune_infilling_dir, pretrain_ckpt_path),
-        # get_command("test", finetune_clm_dir, finetune_clm_ckpt_path),
+        get_command("test_clm", finetune_clm_dir, finetune_clm_ckpt_path),
+        get_command("test_infilling", finetune_infilling_dir, finetune_infilling_ckpt_path),
     ]
     predict_lines = [
         get_command("generate_clm", finetune_clm_dir, finetune_clm_ckpt_path),
@@ -134,32 +144,32 @@ def main():
     scripts = []
     predict_scripts = []
 
-    task = "recovery"
-    # task = "infilling"
-    kinds = ["ngram-multi"]
-    # kinds = ["ngram-multi", "single", "bar", "span"]
-    corruption_rates = [0.8]
-    # corruption_rates = [0.9, 0.8, 0.7, 0.6, 0.5]
+    # task = "recovery"
+    task = "infilling" if "infilling" in args.experiment_dir else "recovery"
+    # kinds = ["ngram-multi"]
+    kinds = ["ngram-multi-single", "ngram-multi", "single", "bar", "span"]
+    # corruption_rates = [0.8]
+    corruption_rates = [0.8, 0.6]
     for corruption_rate in corruption_rates:
         for kind in kinds:
             experiment_name = f"{kind}_{int(corruption_rate * 100)}"
             config_path = f"{args.experiment_dir}/script/{experiment_name}.yaml"
 
-            config = get_pretrain_config(args.dataset_dir, task, kind, corruption_rate, seq_len=512)
+            config = get_pretrain_config(args.dataset_dir, task, kind, corruption_rate, seq_len=256)
             with open(config_path, "w") as f:
                 yaml.dump(config, f)
 
-            script, predict_script = get_model_script(experiment_name, config_path, args.experiment_dir)
+            script, predict_script = get_model_script(
+                experiment_name, config_path, args.experiment_dir, model_size="small"
+            )
             scripts.append(script)
             if corruption_rate == 0.8:
                 predict_scripts.append(predict_script)
 
-    # scripts.append(f"python plot_loss.py --experiment_dir {args.experiment_dir}")
     with open(script_path, "w") as f:
         f.write("\n".join(scripts))
     os.system(f"chmod +x {script_path}")
 
-    # predict_script_path.append(f"python compute_metric.py --experiment_dir {args.experiment_dir} --dataset_dir {args.dataset_dir}")
     with open(predict_script_path, "w") as f:
         f.write(" &\n".join(predict_scripts))
     os.system(f"chmod +x {predict_script_path}")

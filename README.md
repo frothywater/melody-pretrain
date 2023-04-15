@@ -24,32 +24,20 @@ python prepare_data.py --kind octuple --granularity 64 --max_bar 128 --pitch_ran
 
 python prepare_data.py --kind octuple --granularity 64 --max_bar 128 --pitch_range 0 128 --include_empty_bar \
 --midi_dir ../dataset/wikifonia --dataset_dir experiment/dataset/wikifonia
-
-python prepare_data.py --kind cp --granularity 64 --max_bar 128 --pitch_range 0 128 --ngram_length 12 --ngram_top_p 0.3 \
---midi_dir ../dataset/melodynet --dataset_dir experiment/dataset/melodynet_cp \
---pitch_ngram_dir experiment/dataset/melodynet/ngram/label_pitch \
---rhythm_ngram_dir experiment/dataset/melodynet/ngram/label_rhythm
-
-python prepare_data.py --kind cp --granularity 64 --max_bar 128 --pitch_range 0 128 --include_empty_bar \
---midi_dir ../dataset/wikifonia --dataset_dir experiment/dataset/wikifonia_cp
-
-python prepare_data.py --kind remi --granularity 64 --max_bar 128 --pitch_range 0 128 --ngram_length 12 --ngram_top_p 0.3 \
---midi_dir ../dataset/melodynet --dataset_dir experiment/dataset/melodynet_remi \
---pitch_ngram_dir experiment/dataset/melodynet/ngram/label_pitch \
---rhythm_ngram_dir experiment/dataset/melodynet/ngram/label_rhythm
-
-python prepare_data.py --kind remi --granularity 64 --max_bar 128 --pitch_range 0 128 --include_empty_bar \
---midi_dir ../dataset/wikifonia --dataset_dir experiment/dataset/wikifonia_remi
 ```
 
 ### 3 Pretrain
 ```bash
-python generate_script.py --dataset_dir experiment/dataset/melodynet --experiment_dir experiment/ablation_mask
-experiment/ablation_mask/script/run.sh
+python generate_script.py --dataset_dir experiment/dataset/melodynet --experiment_dir experiment/ablation_recovery
+python generate_script.py --dataset_dir experiment/dataset/melodynet --experiment_dir experiment/ablation_infilling
 
-experiment/ablation_mask/script/generate.sh
+experiment/ablation_recovery/script/run.sh;\
+experiment/ablation_infilling/script/run.sh
+
+experiment/ablation_recovery/script/generate.sh
+python compute_metric.py --experiment_dir experiment/ablation_recovery --dataset_dir experiment/dataset/wikifonia
+
 python plot_loss.py --experiment_dir experiment/ablation_mask
-python compute_metric.py --experiment_dir experiment/ablation_repr --dataset_dir experiment/dataset/wikifonia
 python plot_metric.py --experiment_dir experiment/ablation_mask
 ```
 
