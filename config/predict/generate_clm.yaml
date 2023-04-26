@@ -25,5 +25,5 @@ data:
 task:
   class_path: LanguageModelingTask
   init_args:
-    seq_len: 256
+    seq_len: 512
     padding_only: true

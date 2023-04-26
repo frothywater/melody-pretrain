@@ -11,12 +11,12 @@ trainer:
     - class_path: ModelCheckpoint
       init_args:
         monitor: val_loss
-        filename: "best"
         save_weights_only: true
+        filename: "best"
     - class_path: EarlyStopping
       init_args:
         monitor: val_loss
-        patience: 5
+        patience: 10
 model:
   lr: 1e-5
   fixed_lr: true
@@ -27,4 +27,4 @@ data:
 task:
   class_path: LanguageModelingTask
   init_args:
-    seq_len: 256
+    seq_len: 512

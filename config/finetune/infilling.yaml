@@ -11,22 +11,22 @@ trainer:
     - class_path: ModelCheckpoint
       init_args:
         monitor: val_loss
-        filename: "best"
         save_weights_only: true
+        filename: "best"
     - class_path: EarlyStopping
       init_args:
         monitor: val_loss
-        patience: 5
+        patience: 10
 model:
   lr: 1e-5
   fixed_lr: true
   dataset_dir: experiment/dataset/wikifonia
 data:
-  batch_size: 8
+  batch_size: 16
   dataset_dir: experiment/dataset/wikifonia
   load_bar_data: true
 task:
   class_path: InfillingTask
   init_args:
-    seq_len: 256
+    seq_len: 512
     kind: fixed_bar

@@ -13,6 +13,6 @@ data:
 task:
   class_path: InfillingTask
   init_args:
-    seq_len: 256
+    seq_len: 512
     kind: fixed_bar
     random_crop: false

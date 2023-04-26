@@ -26,5 +26,5 @@ task:
   class_path: InfillingTask
   init_args:
     kind: fixed_bar
-    seq_len: 256
+    seq_len: 512
     random_crop: false
