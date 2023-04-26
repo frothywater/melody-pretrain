@@ -149,7 +149,7 @@ def main():
     # kinds = ["ngram-multi"]
     kinds = ["ngram-multi-single", "ngram-multi", "single", "bar", "span"]
     # corruption_rates = [0.8]
-    corruption_rates = [0.8, 0.6]
+    corruption_rates = [0.4, 0.2]
     for corruption_rate in corruption_rates:
         for kind in kinds:
             experiment_name = f"{kind}_{int(corruption_rate * 100)}"

@@ -18,7 +18,19 @@ python lexicon.py prepare --length 12 --ngram_kind bar_onset --ngram_dir experim
 (Keep tokenizer configs the same between pretrain and finetune stages.)
 ```bash
 python prepare_data.py --kind octuple --granularity 64 --max_bar 128 --pitch_range 0 128 --ngram_length 12 --ngram_top_p 0.3 \
---midi_dir ../dataset/melodynet --dataset_dir experiment/dataset/melodynet \
+--midi_dir ../dataset/melodynet_old --dataset_dir experiment/dataset/melodynet \
+--pitch_ngram_dir experiment/dataset/melodynet/ngram/label_pitch \
+--rhythm_ngram_dir experiment/dataset/melodynet/ngram/label_rhythm
+
+python prepare_data.py --kind octuple --granularity 64 --max_bar 128 --pitch_range 0 128 --ngram_length 12 --ngram_top_p 0.3 \
+--midi_dir ../dataset/melodynet_old --dataset_dir experiment/dataset/melodynet_ngram_mixed \
+--mixed_ngram_dir experiment/dataset/melodynet/ngram/label_mixed;\
+python prepare_data.py --kind octuple --granularity 64 --max_bar 128 --pitch_range 0 128 --ngram_length 8 --ngram_top_p 0.3 \
+--midi_dir ../dataset/melodynet_old --dataset_dir experiment/dataset/melodynet_ngram_8 \
+--pitch_ngram_dir experiment/dataset/melodynet/ngram/label_pitch \
+--rhythm_ngram_dir experiment/dataset/melodynet/ngram/label_rhythm;\
+python prepare_data.py --kind octuple --granularity 64 --max_bar 128 --pitch_range 0 128 --ngram_length 4 --ngram_top_p 0.3 \
+--midi_dir ../dataset/melodynet_old --dataset_dir experiment/dataset/melodynet_ngram_4 \
 --pitch_ngram_dir experiment/dataset/melodynet/ngram/label_pitch \
 --rhythm_ngram_dir experiment/dataset/melodynet/ngram/label_rhythm
 
@@ -28,17 +40,20 @@ python prepare_data.py --kind octuple --granularity 64 --max_bar 128 --pitch_ran
 
 ### 3 Pretrain
 ```bash
-python generate_script.py --dataset_dir experiment/dataset/melodynet --experiment_dir experiment/ablation_recovery
 python generate_script.py --dataset_dir experiment/dataset/melodynet --experiment_dir experiment/ablation_infilling
+python generate_script.py --dataset_dir experiment/dataset/melodynet --experiment_dir experiment/ablation_recovery
 
-experiment/ablation_recovery/script/run.sh;\
 experiment/ablation_infilling/script/run.sh
+experiment/ablation_recovery/script/run.sh
+experiment/ablation_other/script/run.sh;\
+experiment/ablation_ngram/script/run.sh
 
-experiment/ablation_recovery/script/generate.sh
-python compute_metric.py --experiment_dir experiment/ablation_recovery --dataset_dir experiment/dataset/wikifonia
+experiment/ablation_infilling/script/generate.sh
+python compute_metric.py --experiment_dir experiment/ablation_infilling --dataset_dir experiment/dataset/wikifonia
 
-python plot_loss.py --experiment_dir experiment/ablation_mask
-python plot_metric.py --experiment_dir experiment/ablation_mask
+python plot_loss.py --experiment_dir experiment/ablation_recovery
+python plot_loss.py --experiment_dir experiment/ablation_infilling
+python plot_metric.py --experiment_dir experiment/ablation_infilling
 ```
 
 ## Dependencies

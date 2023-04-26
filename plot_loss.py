@@ -26,23 +26,18 @@ def get_test_data(experiment_dir: str):
     num_variables = None
     for event_file in event_files:
         variables, task = get_model_variables_and_task(event_file)
+        if "finetune" not in task:
+            continue
         if num_variables is None:
             num_variables = len(variables)
         else:
             assert num_variables == len(variables)
 
         scalars = SummaryReader(event_file).scalars
-
-        # ppl = scalars[scalars.tag == "perplexity"].value
-        # if not ppl.empty:
-        #     ppl = ppl.iloc[-1]
-        #     results.append((*variables, task, ppl))
-
-        if "finetune" in task:
-            val_loss = scalars[scalars.tag == "val_loss"].value
-            if not val_loss.empty:
-                val_loss = val_loss.iloc[-1]
-                results.append((*variables, task, val_loss))
+        ppl = scalars[scalars.tag == "perplexity"].value
+        if not ppl.empty:
+            ppl = ppl.iloc[-1]
+            results.append((*variables, task, ppl))
 
     columns = [f"var_{i}" for i in range(num_variables)] + ["task", "value"]
     data = pd.DataFrame(results, columns=columns)
@@ -62,7 +57,7 @@ def save_figure(data: pd.DataFrame, dest_path: str, label_0="var_0", label_1="va
     var_0_order = sorted(data[label_0].unique())
     var_1_order = sorted(data[label_1].unique())
     g = sns.FacetGrid(data, col="task", hue=label_0, sharey=False, col_order=task_sorted, hue_order=var_0_order)
-    g.map(sns.pointplot, label_1, label_value, order=var_1_order)
+    g.map(sns.pointplot, label_1, label_value, order=var_1_order, scale=0.5)
     g.add_legend()
     g.savefig(dest_path)
 
@@ -72,14 +67,14 @@ def main():
     parser.add_argument("--experiment_dir", type=str, required=False)
     args = parser.parse_args()
 
-    figure_path = os.path.join(args.experiment_dir, "result", "loss.png")
-    csv_path = os.path.join(args.experiment_dir, "result", "loss.csv")
+    figure_path = os.path.join(args.experiment_dir, "result", "ppl.png")
+    csv_path = os.path.join(args.experiment_dir, "result", "ppl.csv")
     os.makedirs(os.path.dirname(figure_path), exist_ok=True)
 
     # data = pd.read_csv(csv_path)
     data = get_test_data(args.experiment_dir)
     data.to_csv(csv_path, index=False)
-    save_figure(data, figure_path, label_0="model", label_1="rate", label_value="loss")
+    save_figure(data, figure_path, label_0="model", label_1="rate", label_value="ppl")
 
 
 if __name__ == "__main__":
