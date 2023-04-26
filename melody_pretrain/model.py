@@ -94,8 +94,8 @@ class MelodyModel(pl.LightningModule):
 
     def _get_prefix_attention_mask(self, source_length: int, length: int) -> torch.Tensor:
         if not hasattr(self, "prefix_attention_mask"):
-            self.prefix_attention_mask = self._create_prefix_attention_mask(source_length=256, length=768)
-            self.prefix_source_length = 256
+            self.prefix_attention_mask = self._create_prefix_attention_mask(source_length=512, length=1536)
+            self.prefix_source_length = 512
 
         assert source_length <= self.prefix_source_length and length <= self.prefix_attention_mask.shape[0]
         start = self.prefix_source_length - source_length
@@ -299,12 +299,12 @@ class MelodyTestingModel(MelodyModel):
         logits = self(batch)
         loss = self._get_loss(logits, batch.label_ids)
         return torch.exp(loss)
-    
+
     def get_ppl_strided(self, batch: DataBatch) -> torch.Tensor:
         seq_len = max(batch.lengths)
         if self.pad_token_tensor.device != self.device:
             self.pad_token_tensor = self.pad_token_tensor.to(self.device)
-        
+
         nlls = []
         valid_counts = []
         previous_end_index = 0
@@ -327,13 +327,14 @@ class MelodyTestingModel(MelodyModel):
             )
             logits = self(new_batch)
             loss = self._get_loss(logits, new_batch.label_ids)
-            
+
             valid_count = sum(target_lengths)
             negative_log_likelihood = loss * valid_count
             nlls.append(negative_log_likelihood)
             valid_counts.append(valid_count)
             previous_end_index = end_index
 
+        assert sum(valid_counts) == sum(batch.lengths)
         return torch.exp(torch.stack(nlls).sum() / sum(valid_counts))
 
     def test_step(self, batch: DataBatch, batch_idx: int) -> torch.Tensor:
@@ -346,8 +347,8 @@ class MelodyTestingModel(MelodyModel):
             ppl = self.get_ppl_strided(batch)
         else:
             raise ValueError(f"Unsupported attention kind: {batch.attention_kind}")
-            
-        self.log("perplexity", ppl, sync_dist=True)
+
+        self.log("perplexity", ppl, batch_size=batch.input_ids.shape[0], sync_dist=True)
         return ppl
 
 

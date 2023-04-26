@@ -18,7 +18,7 @@ from melody_pretrain.dataset import (
 )
 from melody_pretrain.tokenizer import MIDITokenizer
 
-dataset_dir = "experiment/dataset/wikifonia_remi"
+dataset_dir = "experiment/dataset/melodynet"
 
 
 def get_data_module(mask: str):
@@ -32,11 +32,10 @@ def get_data_module(mask: str):
         masking = RandomNgramMasking(corruption_rate=0.5, extra_data_field_name="pitch_ngrams")
     elif mask == "fixed_bar":
         masking = FixedBarMasking(6, 4, 6)
-    data_collator = DataCollatorForRecovery(
+    data_collator = DataCollatorForInfilling(
         masking=masking,
         seq_len=100,
         random_crop=False,
-        random_mask_ratio=0.5,
     )
     data_module = MelodyPretrainDataModule(
         dataset_dir=dataset_dir,

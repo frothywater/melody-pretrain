@@ -1202,9 +1202,11 @@ class MelodyDataset(Dataset):
         if self.load_bar_data:
             extra_data["bar_spans"] = file["bar_spans"]
         if self.load_ngram_data:
-            extra_data["pitch_ngrams"] = file["pitch_ngrams"]
-            extra_data["rhythm_ngrams"] = file["rhythm_ngrams"]
-            # extra_data["ngrams"] = file["ngrams"]
+            if "ngrams" in file:
+                extra_data["ngrams"] = file["ngrams"]
+            else:
+                extra_data["pitch_ngrams"] = file["pitch_ngrams"]
+                extra_data["rhythm_ngrams"] = file["rhythm_ngrams"]
         return DatasetItem(data, note_map, extra_data, filename)
 
 
