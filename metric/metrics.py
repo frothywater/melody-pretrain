@@ -24,37 +24,39 @@ from .utils import cross_valid, overlap_area
 # metric shapes
 mgeval_metric_shapes = {
     "total_pitch_class_histogram": (12,),
-    "pitch_class_transition_matrix": (12, 12),
     "note_length_hist": (12,),
-    "note_length_transition_matrix": (12, 12),
+    # "pitch_class_transition_matrix": (12, 12),
+    # "note_length_transition_matrix": (12, 12),
 }
 
 # metric names
 mgeval_scalar_metric_names = [
-    "pitch_range",
-    "avg_pitch_interval",
     "avg_IOI",
+    # "pitch_range",
+    # "avg_pitch_interval",
 ]
 mgeval_array_metric_names = [
     "total_pitch_class_histogram",
-    "pitch_class_transition_matrix",
     "note_length_hist",
-    "note_length_transition_matrix",
+    # "pitch_class_transition_matrix",
+    # "note_length_transition_matrix",
 ]
 mgeval_metric_names = mgeval_scalar_metric_names + mgeval_array_metric_names
 
 jazzeval_metric_names = ["pitch_entropy_1", "pitch_entropy_4", "groove_similarity"]
-muspy_metric_names = ["scale_consistency", "empty_beat_rate", "empty_measure_rate"]
+muspy_metric_names = ["scale_consistency", "empty_beat_rate"]
 
 custom_scalar_metric_names = ["distinct_ngram_percentage_short", "distinct_ngram_percentage_medium", "distinct_ngram_percentage_long"]
 custom_array_metric_names = ["bar_pair_similarity"]
 custom_metric_names = custom_scalar_metric_names + custom_array_metric_names
 
-absolute_metric_names = mgeval_scalar_metric_names + jazzeval_metric_names + muspy_metric_names + custom_scalar_metric_names
+absolute_metric_names = muspy_metric_names + custom_scalar_metric_names
+# absolute_metric_names = mgeval_scalar_metric_names + jazzeval_metric_names + muspy_metric_names + custom_scalar_metric_names
 oa_metric_names = mgeval_metric_names
 average_error_metric_names = custom_array_metric_names
 
-all_metric_names = mgeval_metric_names + jazzeval_metric_names + muspy_metric_names + custom_metric_names
+all_metric_names = mgeval_metric_names + muspy_metric_names + custom_metric_names
+# all_metric_names = mgeval_metric_names + jazzeval_metric_names + muspy_metric_names + custom_metric_names
 
 
 def compute_metric(midi_file: str, metric_name: str):
