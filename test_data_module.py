@@ -34,8 +34,9 @@ def get_data_module(mask: str):
         masking = FixedBarMasking(6, 4, 6)
     data_collator = DataCollatorForInfilling(
         masking=masking,
-        seq_len=100,
+        seq_len=50,
         random_crop=False,
+        permutated_infilling=True,
     )
     data_module = MelodyPretrainDataModule(
         dataset_dir=dataset_dir,
@@ -59,10 +60,11 @@ if __name__ == "__main__":
         print("filename:", batch.filenames[0], file=file)
         input_tokens = tokenizer.convert_ids_to_tokens(batch.input_ids.squeeze(0).numpy())
         label_tokens = tokenizer.convert_ids_to_tokens(batch.label_ids.squeeze(0).numpy())
-        for input_token, label_token in zip(input_tokens, label_tokens):
-            print(input_token, "->", label_token, file=file)
+        for i, (input_token, label_token) in enumerate(zip(input_tokens, label_tokens)):
+            print(i, input_token, "->", label_token, file=file)
         print("attention_kind:", batch.attention_kind, file=file)
         print("length:", batch.lengths[0], file=file)
+        print("positional_ids:", batch.positional_ids[0], file=file)
         if batch.source_lengths is not None:
             print("source_length:", batch.source_lengths[0], file=file)
 

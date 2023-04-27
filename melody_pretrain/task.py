@@ -75,7 +75,6 @@ class InfillingTask(TrainingTask):
         mean_span_length: int = 5,
         random_crop: bool = True,
         permutated_infilling: bool = False,
-        span_independent_infilling: bool = False,
     ):
         super().__init__(f"{kind}_{task_name}", weight)
         self.kinds = kind if isinstance(kind, list) else [kind]
@@ -85,7 +84,6 @@ class InfillingTask(TrainingTask):
         self.seq_len = seq_len
         self.random_crop = random_crop
         self.permutated_infilling = permutated_infilling
-        self.span_independent_infilling = span_independent_infilling
 
     def get_data_collator(self) -> DataCollator:
         masking = get_masking(
@@ -100,7 +98,6 @@ class InfillingTask(TrainingTask):
             seq_len=self.seq_len,
             random_crop=self.random_crop,
             permutated_infilling=self.permutated_infilling,
-            span_independent_infilling=self.span_independent_infilling,
         )
 
     def __call__(self, model, batch: DataBatch, **kwargs) -> torch.Tensor:
@@ -219,7 +216,9 @@ class RewritingTask(TrainingTask):
         label_ids = torch.stack(
             [torch.cat([label, self.pad_token_tensor.repeat(self.whole_seq_len - len(label), 1)]) for label in labels]
         )
-        new_batch = DataBatch(input_ids, label_ids, attention_kind="prefix", lengths=input_lengths, source_lengths=source_lengths)
+        new_batch = DataBatch(
+            input_ids, label_ids, attention_kind="prefix", lengths=input_lengths, source_lengths=source_lengths
+        )
 
         # 4. Feed prefixed data (fake + real) to the original model for seq2seq task
         x = model(new_batch)

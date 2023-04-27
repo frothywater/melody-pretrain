@@ -5,6 +5,7 @@ import torch
 import torch.nn as nn
 
 from .tokenizer import MIDITokenizer
+from .dataset import positional_id_padding_index
 
 
 class CompoundTokenFuser(nn.Module):
@@ -62,7 +63,7 @@ class CompoundTokenFuser(nn.Module):
 
 class PositionalEncoding(nn.Module):
     """Positional encoding for the transformer."""
-    
+
     def __init__(self, model_dim: int, max_seq_len: int = 2048) -> None:
         super().__init__()
         self.model_dim = model_dim
@@ -86,3 +87,22 @@ class PositionalEncoding(nn.Module):
         _, seq_len, _ = x.shape
         x = x + self.positional_encoding[:seq_len].unsqueeze(0)
         return x
+
+
+class CustomPositionalEncoding(nn.Module):
+    """Custom Learnable Positional Encoding for the transformer, using provided positonal ids."""
+
+    def __init__(self, model_dim: int, max_seq_len: int) -> None:
+        super().__init__()
+        self.model_dim = model_dim
+        self.max_seq_len = max_seq_len
+        self.embedding = nn.Embedding(max_seq_len + 1, model_dim, padding_idx=positional_id_padding_index)
+
+    def forward(self, x: torch.Tensor, positional_ids: torch.Tensor) -> torch.Tensor:
+        """Args:
+            x: (batch_size, seq_len, model_dim)
+            positional_ids: (batch_size, seq_len)
+        Returns:
+            x: (batch_size, seq_len, model_dim)
+        """
+        return x + self.embedding(positional_ids)

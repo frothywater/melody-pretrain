@@ -10,6 +10,7 @@ from torch.utils.data import DataLoader, Dataset
 from .tokenizer import MIDITokenizer
 
 AttentionKind = Union[Literal["full"], Literal["causal"], Literal["prefix"]]
+positional_id_padding_index = 0
 
 
 class DatasetItem(NamedTuple):
@@ -61,6 +62,9 @@ class DataBatch(NamedTuple):
     lengths: Optional[List[int]] = None
     # Prefix length for infilling/recovery
     source_lengths: Optional[List[int]] = None
+
+    # Positional IDs for permutated blank infilling
+    positional_ids: Optional[torch.Tensor] = None
 
     filenames: Optional[List[str]] = None
 
@@ -878,12 +882,10 @@ class DataCollatorForInfilling(DataCollator):
         seq_len: int,
         random_crop: bool = False,
         permutated_infilling: bool = False,
-        span_independent_infilling: bool = False,
     ):
         super().__init__(seq_len, random_crop)
         self.masking = masking
         self.permutated_infilling = permutated_infilling
-        self.span_independent_infilling = span_independent_infilling
 
         self.whole_seq_length = masking.get_estimated_infilling_seq_length(seq_len)
         print("estimated whole sequence length:", self.whole_seq_length)
@@ -900,21 +902,24 @@ class DataCollatorForInfilling(DataCollator):
         permutated: bool,
         is_long_mask: bool,
     ) -> Tuple[np.ndarray, np.ndarray, List[int], List[int], List[int]]:
-        assert len(noise_span_indices) == len(noise_spans)
-        assert noise_span_indices == sorted(noise_span_indices)
+        num_spans = len(nonnoise_spans) + len(noise_spans)
+        noise_span_indices = sorted(noise_span_indices)
+        nonnoise_span_indices = set(range(num_spans)) - set(noise_span_indices)
+        nonnoise_span_indices = sorted(nonnoise_span_indices)
+        assert len(noise_span_indices) == len(noise_spans) and len(nonnoise_span_indices) == len(nonnoise_spans)
 
         source_list, target_list = [], []
+        # record position of corresponding [MASK] token in source sequence for each noise span
+        noise_span_mask_positions = []
         current_nonnoise, current_noise = 0, 0
-        mask_positions, sep_positions, target_span_lengths = [], [], []
         current_source_position = 0
-        for span_index in range(len(nonnoise_spans) + len(noise_spans)):
+        for span_index in range(num_spans):
             if current_noise < len(noise_spans) and span_index == noise_span_indices[current_noise]:
-                if is_long_mask:
-                    source_list.append([self.tokenizer.long_mask_token_ids])
-                else:
-                    source_list.append([self.tokenizer.mask_token_ids])
+                source_list.append(
+                    [self.tokenizer.long_mask_token_ids if is_long_mask else self.tokenizer.mask_token_ids]
+                )
                 target_list.append(np.concatenate(([self.tokenizer.sep_token_ids], noise_spans[current_noise]), axis=0))
-                mask_positions.append(current_source_position)
+                noise_span_mask_positions.append(current_source_position)
                 current_source_position += 1
                 current_noise += 1
             else:
@@ -926,17 +931,18 @@ class DataCollatorForInfilling(DataCollator):
         if permutated and len(noise_spans) > 1:
             permutation = np.random.permutation(len(noise_spans))
             target_list = [target_list[i] for i in permutation]
+            noise_span_mask_positions = [noise_span_mask_positions[i] for i in permutation]
 
         source = np.concatenate(source_list, axis=0)
         target = np.concatenate(target_list, axis=0)
-        target_span_lengths = [len(target) for target in target_list]
-        sep_positions = [0] + np.cumsum(target_span_lengths)[:-1].tolist()
+        noise_span_lengths = [len(target) for target in target_list]
+        sep_positions = [0] + np.cumsum(noise_span_lengths)[:-1].tolist()
 
-        if permutated and len(noise_spans) > 1:
-            # reorder sep positions back to original, so that sep postitions are corresponding to mask positions
-            sep_positions = [sep_positions[i] for i in np.argsort(permutation)]
+        # # reorder sep positions back to original, so that sep postitions are corresponding to mask positions
+        # if permutated and len(noise_spans) > 1:
+        #     sep_positions = [sep_positions[i] for i in np.argsort(permutation)]
 
-        return source, target, mask_positions, sep_positions, target_span_lengths
+        return source, target, sep_positions, noise_span_mask_positions, noise_span_lengths
 
     def _get_input_and_label(
         self,
@@ -967,6 +973,32 @@ class DataCollatorForInfilling(DataCollator):
         )
         return input, label
 
+    def get_positional_ids(
+        self, source_length: int, noise_span_mask_positions: List[int], noise_span_lengths: List[int]
+    ) -> np.ndarray:
+        source_part = np.arange(source_length)
+        target_parts = [
+            np.ones(length, dtype=np.int64) * mask_position
+            for mask_position, length in zip(noise_span_mask_positions, noise_span_lengths)
+        ]
+        # +1 since 0 is used for padding
+        return np.concatenate([source_part] + target_parts, axis=0) + 1
+
+    def pad_positional_ids(
+        self, positional_ids_list: List[np.ndarray], max_length: Optional[int] = None
+    ) -> List[np.ndarray]:
+        result = []
+        max_length = max_length or max(len(data) for data in positional_ids_list)
+        for data in positional_ids_list:
+            assert (
+                len(data) <= max_length
+            ), f"length of data should be less than max_length, but got {len(data)} > {max_length}"
+            if len(data) < max_length:
+                pad = np.ones(max_length - len(data), dtype=data.dtype) * positional_id_padding_index
+                data = np.concatenate([data, pad], axis=0)
+            result.append(data)
+        return result
+
     def __call__(self, batch: List[DatasetItem]) -> DataBatch:
         data_list = [item.data for item in batch]
         extra_data_list = [item.extra_data for item in batch]
@@ -977,12 +1009,12 @@ class DataCollatorForInfilling(DataCollator):
 
         # collect all the data, and genereate the inputs and labels
         inputs, labels = [], []
+        positional_ids_list = []
         source_lengths, input_lengths = [], []
-        mask_positions_list, sep_positions_list = [], []
         for data, note_map, extra_data, offset in zip(data_list, note_maps, extra_data_list, offsets):
             infilling_data = self.masking.mask_for_infilling(data, note_map, offset=offset, **extra_data)
 
-            source, target, mask_positions, sep_positions, _ = self._get_source_and_target(
+            source, target, sep_positions, noise_span_mask_positions, noise_span_lengths = self._get_source_and_target(
                 infilling_data.nonnoise_spans,
                 infilling_data.noise_spans,
                 noise_span_indices=infilling_data.noise_span_indices,
@@ -995,13 +1027,15 @@ class DataCollatorForInfilling(DataCollator):
                 sep_positions=sep_positions,
                 field_padding_indices=infilling_data.field_padding_indices,
             )
+            if self.permutated_infilling:
+                positional_ids = self.get_positional_ids(len(source), noise_span_mask_positions, noise_span_lengths)
+                assert len(positional_ids) == len(input)
+                positional_ids_list.append(positional_ids)
 
             inputs.append(input)
             labels.append(label)
             source_lengths.append(len(source))
             input_lengths.append(len(input))
-            mask_positions_list.append(mask_positions)
-            sep_positions_list.append(sep_positions)
 
         # pad
         max_length = max(input_lengths)
@@ -1010,7 +1044,13 @@ class DataCollatorForInfilling(DataCollator):
             self.whole_seq_length = max_length
         input_ids = torch.from_numpy(np.stack(self.pad(inputs, self.whole_seq_length), axis=0)).long()
         label_ids = torch.from_numpy(np.stack(self.pad(labels, self.whole_seq_length), axis=0)).long()
-        _, seq_len, _ = input_ids.shape
+
+        # positional ids for permutated infilling
+        positional_ids = None
+        if self.permutated_infilling:
+            positional_ids = torch.from_numpy(
+                np.stack(self.pad_positional_ids(positional_ids_list, self.whole_seq_length), axis=0)
+            ).long()
 
         filenames = [item.filename for item in batch]
         return DataBatch(
@@ -1020,6 +1060,7 @@ class DataCollatorForInfilling(DataCollator):
             lengths=input_lengths,
             source_lengths=source_lengths,
             filenames=filenames,
+            positional_ids=positional_ids,
         )
 
 

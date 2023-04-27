@@ -8,7 +8,7 @@ import torch.nn.functional as F
 from lightning.pytorch.callbacks import BasePredictionWriter
 
 from .dataset import DataBatch
-from .module import CompoundTokenFuser, PositionalEncoding
+from .module import CompoundTokenFuser, CustomPositionalEncoding, PositionalEncoding
 from .task import TrainingTask
 from .tokenizer import MIDITokenizer
 from .utils import top_k_top_p_sample
@@ -31,6 +31,7 @@ class MelodyModel(pl.LightningModule):
         num_heads: int,
         dropout: float,
         use_positional_encoding: bool = False,
+        use_custom_positional_encoding: bool = False,
         **kwargs,
     ) -> None:
         super().__init__()
@@ -50,11 +51,17 @@ class MelodyModel(pl.LightningModule):
         self.num_heads = num_heads
         self.dropout = dropout
 
+        self.default_seq_len = 512
+
         self.fuser = CompoundTokenFuser(self.tokenizer, embedding_dim, model_dim)
 
         self.use_positional_encoding = use_positional_encoding
         if use_positional_encoding:
             self.positional_encoding = PositionalEncoding(model_dim)
+
+        self.use_custom_positional_encoding = use_custom_positional_encoding
+        if use_custom_positional_encoding:
+            self.custom_positional_encoding = CustomPositionalEncoding(model_dim, max_seq_len=self.default_seq_len)
 
         self.transformer_encoder = nn.TransformerEncoder(
             nn.TransformerEncoderLayer(
@@ -73,7 +80,7 @@ class MelodyModel(pl.LightningModule):
 
     def _get_causal_attention_mask(self, length: int) -> torch.Tensor:
         if not hasattr(self, "causal_attention_mask"):
-            self.causal_attention_mask = self._create_causal_attention_mask(length=512)
+            self.causal_attention_mask = self._create_causal_attention_mask(length=self.default_seq_len)
         assert length <= self.causal_attention_mask.shape[0]
         return self.causal_attention_mask[:length, :length]
 
@@ -94,8 +101,10 @@ class MelodyModel(pl.LightningModule):
 
     def _get_prefix_attention_mask(self, source_length: int, length: int) -> torch.Tensor:
         if not hasattr(self, "prefix_attention_mask"):
-            self.prefix_attention_mask = self._create_prefix_attention_mask(source_length=512, length=1536)
-            self.prefix_source_length = 512
+            self.prefix_attention_mask = self._create_prefix_attention_mask(
+                source_length=self.default_seq_len, length=3 * self.default_seq_len
+            )
+            self.prefix_source_length = self.default_seq_len
 
         assert source_length <= self.prefix_source_length and length <= self.prefix_attention_mask.shape[0]
         start = self.prefix_source_length - source_length
@@ -136,6 +145,8 @@ class MelodyModel(pl.LightningModule):
         x = self.fuser(batch.input_ids)
         if self.use_positional_encoding:
             x = self.positional_encoding(x)
+        if self.use_custom_positional_encoding and batch.positional_ids is not None:
+            x = self.custom_positional_encoding(x, batch.positional_ids)
         x = self.transformer_encoder(x, src_key_padding_mask=padding_mask, mask=attention_mask)
         decoded = self.fuser.decode(x)
         if return_outputs:
@@ -182,6 +193,7 @@ class MelodyPretrainModel(MelodyModel):
         fixed_lr: bool = False,
         # Training configuration
         use_positional_encoding: bool = False,
+        use_custom_positional_encoding: bool = False,
         **kwargs,
     ) -> None:
         super().__init__(
@@ -193,6 +205,7 @@ class MelodyPretrainModel(MelodyModel):
             num_heads=num_heads,
             dropout=dropout,
             use_positional_encoding=use_positional_encoding,
+            use_custom_positional_encoding=use_custom_positional_encoding,
         )
 
         self.lr = lr
