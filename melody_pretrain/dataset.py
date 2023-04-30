@@ -498,6 +498,7 @@ class FixedBarMasking(InfillingMasking):
         num_future_bars: int,
         extra_data_field_name: str = "bar_spans",
         random_crop: bool = False,
+        force_bar_length: bool = False,
     ):
         super().__init__()
         self.num_past_bars = num_past_bars
@@ -506,6 +507,7 @@ class FixedBarMasking(InfillingMasking):
         self.num_total_bars = num_past_bars + num_middle_bars + num_future_bars
         self.extra_data_field_name = extra_data_field_name
         self.random_crop = random_crop
+        self.force_bar_length = force_bar_length
 
     def _get_fixed_bar_spans(self, bar_note_spans: np.ndarray, note_map: np.ndarray):
         """Get fixed noise bar spans based on given numbers of past, masking and future bars.
@@ -515,7 +517,8 @@ class FixedBarMasking(InfillingMasking):
             past_start, past_end, future_start, future_end: indices of past, masking and future bars
         """
         num_bars = len(bar_note_spans)
-        assert num_bars >= self.num_total_bars, f"num_bars ({num_bars}) < num_total_bars ({self.num_total_bars})"
+        if self.force_bar_length:
+            assert num_bars >= self.num_total_bars, f"num_bars ({num_bars}) < num_total_bars ({self.num_total_bars})"
         start_bar_index = (
             np.random.randint(num_bars - self.num_total_bars)
             if self.random_crop and num_bars > self.num_total_bars
@@ -526,7 +529,9 @@ class FixedBarMasking(InfillingMasking):
         middle_start_note = bar_note_spans[start_bar_index + self.num_past_bars]["start"]
         middle_end_note = bar_note_spans[start_bar_index + self.num_past_bars + self.num_middle_bars - 1]["end"]
         future_start_note = bar_note_spans[start_bar_index + self.num_past_bars + self.num_middle_bars]["start"]
-        future_end_note = bar_note_spans[start_bar_index + self.num_total_bars - 1]["end"]
+        # if didn't force bar length, future end note can be the end of the song
+        future_end_bar = min(start_bar_index + self.num_total_bars - 1, num_bars - 1)
+        future_end_note = bar_note_spans[future_end_bar]["end"]
 
         # convert note indices to token indices
         past_start = note_map[past_start_note]["start"]
@@ -774,10 +779,15 @@ class DataCollator:
 class DataCollatorForPaddingOnly(DataCollator):
     """Data collator for padding only, useful in inference stage."""
 
-    def __init__(self, seq_len: int):
+    def __init__(self, seq_len: int, empty: bool = False):
         super().__init__(seq_len)
+        # Provide empty dummy data for from scratch generation
+        self.empty = empty
 
     def __call__(self, batch: List[DatasetItem]) -> DataBatch:
+        if self.empty:
+            return DataBatch(input_ids=np.empty((1, 0, 0), dtype=np.int64))
+        
         # TODO: Consider right side padding for batch inference?
         data_list = [item.data for item in batch]
         filenames = [item.filename for item in batch]
@@ -809,7 +819,7 @@ class DataCollatorForFixedInfilling(DataCollator):
             assert len(sources) == 2, "Fixed bar masking should generate past and future spans."
             masked_data = np.concatenate([sources[0], [self.tokenizer.long_mask_token_ids], sources[1]], axis=0)
             masked_data_list.append(masked_data)
-        input_ids = np.stack(self.pad(masked_data_list, self.seq_len), axis=0)
+        input_ids = np.stack(self.pad(masked_data_list), axis=0)
         input_ids = torch.from_numpy(input_ids).long()
 
         lengths = [len(data) for data in masked_data_list]

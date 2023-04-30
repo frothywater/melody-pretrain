@@ -409,6 +409,9 @@ class MelodyCompletionModel(MelodyModel):
         self.attention_mask = torch.triu(torch.ones((max_length, max_length), dtype=torch.bool), diagonal=1)
         self.bos_token_tensor = torch.tensor(self.tokenizer.bos_token_ids, dtype=torch.long)
         self.eos_token_tensor = torch.tensor(self.tokenizer.eos_token_ids, dtype=torch.long)
+        
+        self.bar_field_index = self.tokenizer.field_indices["bar"]
+        self.bar_vocab_size = self.tokenizer.vocab_sizes[self.bar_field_index]
 
     def forward(self, input_ids: torch.Tensor, attn_mask: torch.Tensor) -> List[torch.Tensor]:
         x = self.fuser(input_ids)
@@ -433,7 +436,7 @@ class MelodyCompletionModel(MelodyModel):
             input_ids = self.bos_token_tensor.view(1, 1, -1)
 
         # Inference on a single sequence
-        tokens = []
+        # tokens = []
         while input_ids.shape[1] < self.max_length:
             seq_len = input_ids.shape[1]
             attention_mask = self.attention_mask[:seq_len, :seq_len]
@@ -448,15 +451,19 @@ class MelodyCompletionModel(MelodyModel):
                 sampled_tokens.append(sampled_token)
             sampled_tokens = torch.cat(sampled_tokens, dim=-1)
 
-            token = self.tokenizer.convert_id_to_token(sampled_tokens.cpu().numpy())
-            tokens.append(token)
+            # token = self.tokenizer.convert_id_to_token(sampled_tokens.cpu().numpy())
+            # tokens.append(token)
             # print(token)
 
-            # until <EOS> token is generated or the predicted bar length is reached
-            bar_length = self.tokenizer.get_tokens_bar_length(tokens)
-            if torch.all(sampled_tokens == self.eos_token_tensor) or (bar_length >= self.prediction_bar_length):
-                # print("bar length:", bar_length)
+            # until <EOS> token is generated
+            if torch.all(sampled_tokens == self.eos_token_tensor):
                 break
+            # or until the predicted bar length is reached
+            if self.prediction_bar_length <= sampled_tokens[self.bar_field_index] < self.bar_vocab_size:
+                break
+            # bar_length = self.tokenizer.get_tokens_bar_length(tokens)
+            # if bar_length >= self.prediction_bar_length:
+            #     break
 
             # Append the sampled token to the input
             input_ids = torch.cat([input_ids, sampled_tokens.unsqueeze(0).unsqueeze(0)], dim=1)
@@ -479,7 +486,6 @@ class MelodyInfillingModel(MelodyModel):
         num_heads: int,
         dropout: float,
         # Inference hyperparameters
-        num_middle_bars: int,
         temperature: float = 1.0,
         top_k: int = 0,
         top_p: float = 1.0,
@@ -498,7 +504,6 @@ class MelodyInfillingModel(MelodyModel):
             use_positional_encoding=use_positional_encoding,
         )
 
-        self.num_middle_bars = num_middle_bars
         self.temperature = temperature
         self.top_k = top_k
         self.top_p = top_p
@@ -506,6 +511,9 @@ class MelodyInfillingModel(MelodyModel):
 
         self.sep_token_tensor = torch.tensor(self.tokenizer.sep_token_ids, dtype=torch.long)
         self.long_mask_token_tensor = torch.tensor(self.tokenizer.long_mask_token_ids, dtype=torch.long)
+        
+        self.bar_field_index = self.tokenizer.field_indices["bar"]
+        self.bar_vocab_size = self.tokenizer.vocab_sizes[self.bar_field_index]
 
     def forward(self, input_ids: torch.Tensor, attn_mask: torch.Tensor) -> List[torch.Tensor]:
         x = self.fuser(input_ids)
@@ -516,6 +524,7 @@ class MelodyInfillingModel(MelodyModel):
 
     def predict_step(self, batch: DataBatch, batch_idx: int, dataloader_idx: int = 0) -> torch.Tensor:
         input_ids = batch.input_ids
+        assert batch.label_ids is None
         batch_size, original_len, _ = input_ids.shape
         assert batch_size == 1, "Only support batch size of 1 for prediction for now"
         if self.sep_token_tensor.device != self.device:
@@ -523,11 +532,11 @@ class MelodyInfillingModel(MelodyModel):
             self.long_mask_token_tensor = self.long_mask_token_tensor.to(self.device)
 
         mask_token_position = torch.all(input_ids[0, :] == self.long_mask_token_tensor, dim=1).nonzero()[0].item()
+        future_start_bar = input_ids[0, mask_token_position + 1, self.bar_field_index]
 
         # Add one seperator token to the end
         input_ids = torch.cat([input_ids, self.sep_token_tensor.unsqueeze(0).unsqueeze(0)], dim=1)
 
-        tokens = []
         while input_ids.shape[1] < self.max_length:
             seq_len = input_ids.shape[1]
             attention_mask = self._get_prefix_attention_mask(original_len, seq_len)
@@ -542,12 +551,14 @@ class MelodyInfillingModel(MelodyModel):
                 sampled_tokens.append(sampled_token)
             sampled_tokens = torch.cat(sampled_tokens, dim=-1)
 
-            token = self.tokenizer.convert_id_to_token(sampled_tokens.cpu().numpy())
-            tokens.append(token)
+            # token = self.tokenizer.convert_id_to_token(sampled_tokens.cpu().numpy())
             # print(token)
 
             # until <SEP> token is predicted
             if torch.all(sampled_tokens == self.sep_token_tensor):
+                break
+            # or until the first bar of future part is reached
+            if future_start_bar <= sampled_tokens[self.bar_field_index] <= self.bar_vocab_size:
                 break
 
             # Append the sampled token to the input
@@ -557,8 +568,8 @@ class MelodyInfillingModel(MelodyModel):
         input_ids = torch.cat(
             [
                 input_ids[:, :mask_token_position, :],
-                input_ids[:, original_len:, :],
-                input_ids[:, mask_token_position + 1 : original_len, :],
+                input_ids[:, original_len + 1:, :],
+                input_ids[:, mask_token_position + 1 : original_len + 1, :],
             ],
             dim=1,
         )
@@ -589,4 +600,5 @@ class CustomWriter(BasePredictionWriter):
         os.makedirs(os.path.dirname(dest_path), exist_ok=True)
         prediction = prediction[0].cpu().numpy()
         midi = pl_module.tokenizer.decode(prediction)
+        midi = pl_module.tokenizer.filter_overlapping_notes(midi)
         midi.dump(dest_path)

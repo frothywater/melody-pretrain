@@ -9,6 +9,7 @@ from .dataset import (
     DataBatch,
     DataCollator,
     DataCollatorForCausalLanguageModeling,
+    DataCollatorForFixedInfilling,
     DataCollatorForMaskedLanguageModeling,
     DataCollatorForPaddingOnly,
     DataCollatorForInfilling,
@@ -46,16 +47,18 @@ class LanguageModelingTask(TrainingTask):
         task_name: str = "clm",
         weight: float = 1.0,
         random_crop: bool = True,
+        empty: bool = False,
         padding_only: bool = False,
     ):
         super().__init__(task_name, weight)
         self.seq_len = seq_len
+        self.empty = empty
         self.random_crop = random_crop
         self.padding_only = padding_only
 
     def get_data_collator(self) -> DataCollator:
         if self.padding_only:
-            return DataCollatorForPaddingOnly(seq_len=self.seq_len)
+            return DataCollatorForPaddingOnly(seq_len=self.seq_len, empty=self.empty)
         return DataCollatorForCausalLanguageModeling(seq_len=self.seq_len, random_crop=self.random_crop)
 
     def __call__(self, model, batch: DataBatch, **kwargs) -> torch.Tensor:
@@ -75,6 +78,7 @@ class InfillingTask(TrainingTask):
         mean_span_length: int = 5,
         random_crop: bool = True,
         permutated_infilling: bool = False,
+        fixed_bar_inference: bool = False,
     ):
         super().__init__(f"{kind}_{task_name}", weight)
         self.kinds = kind if isinstance(kind, list) else [kind]
@@ -84,6 +88,7 @@ class InfillingTask(TrainingTask):
         self.seq_len = seq_len
         self.random_crop = random_crop
         self.permutated_infilling = permutated_infilling
+        self.fixed_bar_inference = fixed_bar_inference
 
     def get_data_collator(self) -> DataCollator:
         masking = get_masking(
@@ -93,12 +98,15 @@ class InfillingTask(TrainingTask):
             random_crop=self.random_crop,
             probabilities=self.probabilities,
         )
-        return DataCollatorForInfilling(
-            masking=masking,
-            seq_len=self.seq_len,
-            random_crop=self.random_crop,
-            permutated_infilling=self.permutated_infilling,
-        )
+        if self.fixed_bar_inference:
+            return DataCollatorForFixedInfilling(masking=masking, seq_len=self.seq_len)
+        else:
+            return DataCollatorForInfilling(
+                masking=masking,
+                seq_len=self.seq_len,
+                random_crop=self.random_crop,
+                permutated_infilling=self.permutated_infilling,
+            )
 
     def __call__(self, model, batch: DataBatch, **kwargs) -> torch.Tensor:
         logits = model(batch)

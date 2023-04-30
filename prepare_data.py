@@ -32,10 +32,15 @@ def get_bar_spans(midi: MidiFile, include_empty_bar: bool) -> np.ndarray:
         bar_spans = []
         current_bar, last_index = 0, 0
         for index, bar in enumerate(bar_indices):
-            if bar != current_bar:
-                bar_spans += [(last_index, index)] * (bar - current_bar)
-                current_bar = bar
+            if bar > current_bar:
+                # append current bar
+                bar_spans.append((last_index, index))
+                current_bar += 1
                 last_index = index
+                # append empty bars
+                if bar > current_bar:
+                    bar_spans += [(index, index)] * (bar - current_bar)
+                    current_bar = bar
         bar_spans.append((last_index, num_notes))
         return np.array(bar_spans, dtype=bar_span_record_dtype)
 

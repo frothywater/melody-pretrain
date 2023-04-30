@@ -222,7 +222,7 @@ class MIDITokenizer:
                     # if the distance between two consecutive notes is greater than eighth rest,
                     # or the first note is longer than the second note, keep the first note;
                     # otherwise, keep the second note.
-                    if distance >= self.tick_per_beat // 2:
+                    if distance >= self.ticks_per_beat // 2:
                         result.append(note_index)
                     elif cur_note.end - cur_note.start > next_note.end - next_note.start:
                         result.append(note_index)
@@ -279,6 +279,20 @@ class MIDITokenizer:
                 if i == len(tempo_changes) - 1 or tempo_changes[i].time != tempo_changes[i + 1].time
             ]
         return tempo_changes
+
+    def filter_overlapping_notes(self, midi: MidiFile) -> MidiFile:
+        assert len(midi.instruments) == 1
+        # sort notes by start time, end time (longer first), and pitch (higher first)
+        notes = sorted(midi.instruments[0].notes, key=lambda x: (x.start, -x.end, -x.pitch))
+        new_notes = []
+        current_end = None
+        for note in notes:
+            if current_end is None or note.end > current_end:
+                # the note is not overlapped
+                new_notes.append(note)
+                current_end = note.end
+        midi.instruments[0].notes = new_notes
+        return midi
 
     def _find_nearest(self, bins: List[int], value: int) -> int:
         """Find the nearest bin to the value."""
