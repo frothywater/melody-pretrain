@@ -12,7 +12,8 @@ def get_distinct_ngram_percentage(midi_file: str, n_range: Tuple[int, int], max_
     we compute the percentage of distinct n-grams in the pitch sequence.
     We regard 3-5, 6-10, and 11-20 contiguous notes as short, medium, and long excerpts."""
     midi = MidiFile(midi_file)
-    assert len(midi.instruments) == 1
+    if len(midi.instruments) == 0:
+        return 0
     notes = [note for note in midi.instruments[0].notes if note.start < max_bar * bar_ticks]
     
     ngrams = set()
@@ -26,6 +27,10 @@ def get_distinct_ngram_percentage(midi_file: str, n_range: Tuple[int, int], max_
 def get_bar_pair_similarity(midi_file: str, max_bar_interval: int = 31):
     """Museformer"""
     midi = MidiFile(midi_file)
+    result = np.zeros(max_bar_interval, dtype=np.dtype([("similarity", np.float32), ("count", np.int64)]))
+    
+    if len(midi.instruments) == 0:
+        return result
     
     # split notes into bars (start from 1)
     bar_notes = defaultdict(list)
@@ -36,9 +41,9 @@ def get_bar_pair_similarity(midi_file: str, max_bar_interval: int = 31):
         bar_notes[bar + 1].append((note.pitch, position, duration))
     
     max_bar = max(bar_notes.keys())
-    result = np.zeros(max_bar_interval, dtype=np.dtype([("similarity", np.float32), ("count", np.int64)]))
     if max_bar < 2:
         return result
+    
     for interval in range(1, min(max_bar, max_bar_interval + 1)):
         similarities = []
         for i in range(max_bar - interval):

@@ -50,13 +50,13 @@ custom_scalar_metric_names = ["distinct_ngram_percentage_short", "distinct_ngram
 custom_array_metric_names = ["bar_pair_similarity"]
 custom_metric_names = custom_scalar_metric_names + custom_array_metric_names
 
-absolute_metric_names = muspy_metric_names + custom_scalar_metric_names
-# absolute_metric_names = mgeval_scalar_metric_names + jazzeval_metric_names + muspy_metric_names + custom_scalar_metric_names
+# absolute_metric_names = muspy_metric_names + custom_scalar_metric_names
+absolute_metric_names = mgeval_scalar_metric_names + jazzeval_metric_names + muspy_metric_names + custom_scalar_metric_names
 oa_metric_names = mgeval_metric_names
 average_error_metric_names = custom_array_metric_names
 
-all_metric_names = mgeval_metric_names + muspy_metric_names + custom_metric_names
-# all_metric_names = mgeval_metric_names + jazzeval_metric_names + muspy_metric_names + custom_metric_names
+# all_metric_names = mgeval_metric_names + muspy_metric_names + custom_metric_names
+all_metric_names = mgeval_metric_names + jazzeval_metric_names + muspy_metric_names + custom_metric_names
 
 
 def compute_metric(midi_file: str, metric_name: str):
@@ -122,7 +122,7 @@ def compute_average_error(generated_metrics: np.ndarray, test_metrics: np.ndarra
     generated_metrics = generated_metrics["similarity"].sum(axis=0) / generated_metrics["count"].sum(axis=0)
     test_metrics = test_metrics["similarity"].sum(axis=0) / test_metrics["count"].sum(axis=0)
     # 2. mean over bar intervals
-    return np.mean(np.abs(generated_metrics - test_metrics))
+    return np.nanmean(np.abs(generated_metrics - test_metrics))
 
 
 def compute_absolute_metrics(dir: str):

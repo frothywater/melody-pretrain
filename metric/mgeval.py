@@ -5,80 +5,14 @@ Copied from: https://github.com/RichardYang40148/mgeval
 """
 import io
 import math
-from typing import Optional
 
 import midi
 import numpy as np
 import pretty_midi
-from miditoolkit.midi import KeySignature, Note, TempoChange, TimeSignature
-from miditoolkit.midi import parser as midi_parser
-
-
-def crop_midi(file: str, starting_bar: Optional[int] = None, num_bars: Optional[int] = None):
-    midi_obj = midi_parser.MidiFile(file)
-    if starting_bar is None and num_bars is None:
-        return midi_obj
-
-    starting_tick = starting_bar * midi_obj.ticks_per_beat * 4 if starting_bar is not None else 0
-    ending_tick = starting_tick + num_bars * midi_obj.ticks_per_beat * 4 if num_bars is not None else midi_obj.max_tick
-
-    last_tempo_change, last_time_sig_change, last_key_sig_change = None, None, None
-    if starting_tick > 0:
-        last_tempo_change = [tempo for tempo in midi_obj.tempo_changes if tempo.time < starting_tick]
-        last_tempo_change = last_tempo_change[-1] if len(last_tempo_change) > 0 else None
-        last_time_sig_change = [time_sig for time_sig in midi_obj.time_signature_changes if time_sig.time < starting_tick]
-        last_time_sig_change = last_time_sig_change[-1] if len(last_time_sig_change) > 0 else None
-        last_key_sig_change = [key_sig for key_sig in midi_obj.key_signature_changes if key_sig.time < starting_tick]
-        last_key_sig_change = last_key_sig_change[-1] if len(last_key_sig_change) > 0 else None
-
-    for i, track in enumerate(midi_obj.instruments):
-        midi_obj.instruments[i].notes = [
-            Note(
-                pitch=note.pitch,
-                start=note.start - starting_tick,
-                end=note.end - starting_tick,
-                velocity=note.velocity,
-            )
-            for note in track.notes
-            if starting_tick <= note.start < ending_tick
-        ]
-
-    midi_obj.tempo_changes = [
-        TempoChange(tempo=tempo.tempo, time=tempo.time - starting_tick)
-        for tempo in midi_obj.tempo_changes
-        if starting_tick <= tempo.time < ending_tick
-    ]
-    midi_obj.time_signature_changes = [
-        TimeSignature(
-            numerator=time_sig.numerator, denominator=time_sig.denominator, time=time_sig.time - starting_tick
-        )
-        for time_sig in midi_obj.time_signature_changes
-        if starting_tick <= time_sig.time < ending_tick
-    ]
-    midi_obj.key_signature_changes = [
-        KeySignature(key_name=key_sig.key_name, time=key_sig.time - starting_tick)
-        for key_sig in midi_obj.key_signature_changes
-        if starting_tick <= key_sig.time < ending_tick
-    ]
-
-    if last_tempo_change is not None:
-        midi_obj.tempo_changes.insert(0, TempoChange(tempo=last_tempo_change.tempo, time=0))
-    if last_time_sig_change is not None:
-        midi_obj.time_signature_changes.insert(
-            0,
-            TimeSignature(
-                numerator=last_time_sig_change.numerator, denominator=last_time_sig_change.denominator, time=0
-            ),
-        )
-    if last_key_sig_change is not None:
-        midi_obj.key_signature_changes.insert(0, KeySignature(key_name=last_key_sig_change.key_name, time=0))
-
-    # ignore lyrics and markers
-    return midi_obj
 
 
 # feature extractor
-def extract_feature(_file, starting_bar=None, num_bars=None):
+def extract_feature(_file):
     """
     This function extracts two midi feature:
     pretty_midi object: https://github.com/craffel/pretty-midi
@@ -88,14 +22,8 @@ def extract_feature(_file, starting_bar=None, num_bars=None):
         dict(pretty_midi: pretty_midi object,
              midi_pattern: midi pattern contains a list of tracks)
     """
-    midi_obj = crop_midi(_file, starting_bar, num_bars)
-    bytesio = io.BytesIO()
-    midi_obj.dump(file=bytesio)
-    bytesio.seek(0)
-    pretty_midi_file = pretty_midi.PrettyMIDI(bytesio)
-    bytesio.seek(0)
-    midi_pattern = midi.read_midifile(bytesio)
-    bytesio.close()
+    pretty_midi_file = pretty_midi.PrettyMIDI(_file)
+    midi_pattern = midi.read_midifile(_file)
     feature = {"pretty_midi": pretty_midi_file, "midi_pattern": midi_pattern}
     return feature
 
@@ -393,6 +321,8 @@ class metrics(object):
 
         pm_object = feature["pretty_midi"]
         onset = pm_object.get_onsets()
+        if len(onset) <= 1:
+            return 0
         ioi = np.diff(onset)
         avg_ioi = np.mean(ioi)
         return avg_ioi

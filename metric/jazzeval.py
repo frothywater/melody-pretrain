@@ -308,6 +308,8 @@ def compute_piece_groove_similarity(
             1.0 - get_onset_xor_distance(bar_seqs[p[0]], bar_seqs[p[1]], bar_ev_id, pos_evs, pitch_evs=pitch_evs)
         )
 
+    if len(grv_sims) == 0:
+        return 1.0
     return np.mean(grv_sims)
 
 
