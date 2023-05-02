@@ -1,8 +1,8 @@
 # lightning.pytorch==1.8.3.post1
 trainer:
   max_steps: -1
-  max_epochs: 50
-  devices: 2
+  max_epochs: 30
+  devices: "1,"
   accumulate_grad_batches: 1
   callbacks:
     - class_path: LearningRateMonitor
@@ -10,16 +10,13 @@ trainer:
         logging_interval: step
     - class_path: ModelCheckpoint
       init_args:
-        monitor: val_loss
+        save_top_k: -1
+        every_n_epochs: 5
+        every_n_train_steps:
         save_weights_only: true
-        filename: "best"
-    - class_path: EarlyStopping
-      init_args:
-        monitor: val_loss
-        patience: 10
+        filename: "{epoch}"
 model:
   lr: 1e-5
-  fixed_lr: true
   dataset_dir: experiment/dataset/wikifonia
 data:
   batch_size: 16

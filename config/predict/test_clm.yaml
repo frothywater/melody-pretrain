@@ -1,6 +1,6 @@
 # lightning.pytorch==1.8.3.post1
 trainer:
-  devices: 1
+  devices: "1,"
 model:
   class_path: melody_pretrain.model.MelodyTestingModel
   init_args:

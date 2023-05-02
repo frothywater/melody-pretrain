@@ -114,12 +114,12 @@ def get_model_script(
     finetune_infilling_dir = f"{experiment_dir}/model/{experiment_name}/finetune_infilling"
 
     pretrain_ckpt_path = f"{pretrain_dir}/{ckpt_path}/step={pretrain_steps}.ckpt"
-    finetune_clm_ckpt_path = f"{finetune_clm_dir}/{ckpt_path}/best.ckpt"
-    finetune_infilling_ckpt_path = f"{finetune_infilling_dir}/{ckpt_path}/best.ckpt"
+    finetune_clm_ckpt_path = f"{finetune_clm_dir}/{ckpt_path}/epoch=9.ckpt"
+    finetune_infilling_ckpt_path = f"{finetune_infilling_dir}/{ckpt_path}/epoch=14.ckpt"
 
     lines = [
         f"# {experiment_name}",
-        get_command("pretrain", pretrain_dir),
+        # get_command("pretrain", pretrain_dir),
         get_command("finetune_clm", finetune_clm_dir, pretrain_ckpt_path),
         get_command("finetune_infilling", finetune_infilling_dir, pretrain_ckpt_path),
         get_command("test_clm", finetune_clm_dir, finetune_clm_ckpt_path),
@@ -127,7 +127,7 @@ def get_model_script(
     ]
     predict_lines = [
         get_command("generate_clm", finetune_clm_dir, finetune_clm_ckpt_path),
-        # get_command("generate_infilling", finetune_infilling_dir, finetune_infilling_ckpt_path),
+        get_command("generate_infilling", finetune_infilling_dir, finetune_infilling_ckpt_path),
     ]
     return "\n".join(lines), " &\n".join(predict_lines)
 
@@ -144,12 +144,12 @@ def main():
     scripts = []
     predict_scripts = []
 
-    # task = "recovery"
-    task = "infilling" if "infilling" in args.experiment_dir else "recovery"
-    # kinds = ["ngram-multi"]
+    task = "infilling"
+    # task = "infilling" if "infilling" in args.experiment_dir else "recovery"
+    # kinds = ["ngram-multi-single"]
     kinds = ["ngram-multi-single", "ngram-multi", "single", "bar", "span"]
-    # corruption_rates = [0.8]
-    corruption_rates = [0.4, 0.2]
+    # corruption_rates = [0.6]
+    corruption_rates = [0.8, 0.6, 0.4, 0.2]
     for corruption_rate in corruption_rates:
         for kind in kinds:
             experiment_name = f"{kind}_{int(corruption_rate * 100)}"
@@ -163,7 +163,7 @@ def main():
                 experiment_name, config_path, args.experiment_dir, model_size="small"
             )
             scripts.append(script)
-            if corruption_rate == 0.8:
+            if corruption_rate == 0.6:
                 predict_scripts.append(predict_script)
 
     with open(script_path, "w") as f:

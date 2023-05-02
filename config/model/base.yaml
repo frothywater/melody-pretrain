@@ -1,8 +1,8 @@
 # lightning.pytorch==1.8.3.post1
 trainer:
   max_steps: 100000
-  devices: 2
-  accumulate_grad_batches: 1
+  devices: "1,"
+  accumulate_grad_batches: 2
   gradient_clip_val: 1.0
 model:
   class_path: melody_pretrain.model.MelodyPretrainModel

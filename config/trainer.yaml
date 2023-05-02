@@ -4,6 +4,7 @@ trainer:
   accelerator: gpu
   precision: 16-mixed
   strategy: ddp
+  log_every_n_steps: 1
   callbacks:
     - class_path: LearningRateMonitor
       init_args:
