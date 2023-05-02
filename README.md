@@ -36,24 +36,39 @@ python prepare_data.py --kind octuple --granularity 64 --max_bar 128 --pitch_ran
 
 python prepare_data.py --kind octuple --granularity 64 --max_bar 128 --pitch_range 0 128 --include_empty_bar \
 --midi_dir ../dataset/wikifonia --dataset_dir experiment/dataset/wikifonia
+
+python prepare_data.py --kind octuple --granularity 64 --max_bar 128 --pitch_range 0 128 --include_empty_bar \
+--midi_dir experiment/dataset/infilling_comparison/midi --dataset_dir experiment/dataset/infilling_comparison
 ```
 
 ### 3 Pretrain
 ```bash
 python generate_script.py --dataset_dir experiment/dataset/melodynet --experiment_dir experiment/ablation_infilling
 python generate_script.py --dataset_dir experiment/dataset/melodynet --experiment_dir experiment/ablation_recovery
+python generate_script.py --dataset_dir experiment/dataset/melodynet --experiment_dir experiment/final
 
+# experiment/ablation_recovery/script/run.sh
 experiment/ablation_infilling/script/run.sh
-experiment/ablation_recovery/script/run.sh
-experiment/ablation_other/script/run.sh;\
+experiment/ablation_other/script/run.sh
 experiment/ablation_ngram/script/run.sh
+experiment/final/script/run.sh
 
-experiment/ablation_infilling/script/generate.sh
-python compute_metric.py --experiment_dir experiment/ablation_infilling --dataset_dir experiment/dataset/wikifonia
+experiment/final/script/generate.sh
 
 python plot_loss.py --experiment_dir experiment/ablation_recovery
 python plot_loss.py --experiment_dir experiment/ablation_infilling
-python plot_metric.py --experiment_dir experiment/ablation_infilling
+python plot_loss.py --experiment_dir experiment/ablation_other
+python plot_loss.py --experiment_dir experiment/ablation_ngram
+
+python crop_midi.py --src_dir experiment/dataset/infilling_comparison/midi/test --dest_dir experiment/dataset/infilling_comparison/midi/test_4bar --starting_bar 6 --num_bars 4
+python crop_midi.py --src_dir experiment/final/generated/infilling --dest_dir experiment/final/generated/infilling_4bar --starting_bar 6 --num_bars 4
+python compute_metric.py --test_dir experiment/dataset/clm_comparison/midi/test --generated_dir experiment/final/generated/clm --dest_path experiment/final/result/clm_metric.csv
+python compute_metric.py --test_dir experiment/dataset/infilling_comparison/midi/test --generated_dir experiment/final/generated/infilling --dest_path experiment/final/result/infilling_metric.csv --force_filename
+```
+
+### 4 Deploy
+```bash
+python production/convert_checkpoint.py --checkpoint_path experiment/ablation_infilling/model/ngram-multi-single_60/finetune_clm/lightning_logs/version_0/checkpoints/best.ckpt --config_path experiment/ablation_infilling/model/ngram-multi-single_60/finetune_clm/lightning_logs/version_0/config.yaml --output_path experiment/production/melodyglm_finetuned_completion_small.ckpt
 ```
 
 ## Dependencies
