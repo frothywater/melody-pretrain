@@ -55,15 +55,20 @@ experiment/final/script/run.sh
 
 experiment/final/script/generate.sh
 
-python plot_loss.py --experiment_dir experiment/ablation_recovery
+# python plot_loss.py --experiment_dir experiment/ablation_recovery
 python plot_loss.py --experiment_dir experiment/ablation_infilling
 python plot_loss.py --experiment_dir experiment/ablation_other
 python plot_loss.py --experiment_dir experiment/ablation_ngram
 
 python crop_midi.py --src_dir experiment/dataset/infilling_comparison/midi/test --dest_dir experiment/dataset/infilling_comparison/midi/test_4bar --starting_bar 6 --num_bars 4
 python crop_midi.py --src_dir experiment/final/generated/infilling --dest_dir experiment/final/generated/infilling_4bar --starting_bar 6 --num_bars 4
-python compute_metric.py --test_dir experiment/dataset/clm_comparison/midi/test --generated_dir experiment/final/generated/clm --dest_path experiment/final/result/clm_metric.csv
-python compute_metric.py --test_dir experiment/dataset/infilling_comparison/midi/test --generated_dir experiment/final/generated/infilling --dest_path experiment/final/result/infilling_metric.csv --force_filename
+
+python compute_metric.py --test_dir ../dataset/clm_test --generated_dir experiment/final/generated/clm_epoch10 --dest_path experiment/final/result/clm_epoch10.csv
+python compute_metric.py --test_dir ../dataset/clm_test --generated_dir experiment/final/generated/clm_epoch20 --dest_path experiment/final/result/clm_epoch20.csv
+python compute_metric.py --test_dir ../dataset/infilling_test --generated_dir experiment/final/generated/infilling_epoch15 --dest_path experiment/final/result/infilling_epoch15.csv --force_filename
+python compute_metric.py --test_dir ../dataset/infilling_test --generated_dir experiment/final/generated/infilling_epoch30 --dest_path experiment/final/result/infilling_epoch30.csv --force_filename
+
+python compute_metric.py --test_dir ../dataset/clm_test --generated_dir ../music-transformer/experiment/generated --dest_path experiment/result/music_transformer.csv
 ```
 
 ### 4 Deploy
