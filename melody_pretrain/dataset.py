@@ -307,6 +307,54 @@ class SingleSpanMasking(InfillingMasking):
         return seq_len + 2
 
 
+class VariableSpanMasking(InfillingMasking):
+    need_to_mask_per_data = True
+
+    def __init__(self):
+        super().__init__()
+
+    def _get_random_span(self, length: int):
+        num_noise_tokens = np.random.randint(1, length - 1)
+        start = np.random.randint(0, length - num_noise_tokens)
+        end = start + num_noise_tokens
+        return start, end
+
+    def _remove_bos_eos(self, data: np.ndarray) -> np.ndarray:
+        bos_mask = np.all(data == self.tokenizer.bos_token_ids, axis=-1)
+        eos_mask = np.all(data == self.tokenizer.eos_token_ids, axis=-1)
+        return data[~bos_mask & ~eos_mask]
+
+    def _align_bars_(self, data: np.ndarray):
+        bar_field_index = self.tokenizer.field_indices["bar"]
+        bar_vocab_size = self.tokenizer.vocab_sizes[bar_field_index]
+        note_mask = data[:, bar_field_index] < bar_vocab_size
+        min_bar = np.min(data[note_mask, bar_field_index])
+        data[note_mask, bar_field_index] -= min_bar
+
+    def mask_for_infilling(self, data: np.ndarray, note_map: np.ndarray, **kwargs) -> InfillingData:
+        """Mask data with single span for infilling. Put a single mask token for the span.
+        Args:
+            data: (seq_len, num_features)
+        """
+        data = self._remove_bos_eos(data)
+        self._align_bars_(data)
+        
+        seq_len, _ = data.shape
+        start, end = self._get_random_span(seq_len)
+        nonnoise_spans = [data[:start], data[end:]]
+        noise_spans = [data[start:end]]
+        # target span index is always 1, since the sequence is {nonnoise, noise, nonnoise}
+        noise_span_indices = [1]
+        return InfillingData(nonnoise_spans, noise_spans, noise_span_indices, is_long_mask=True)
+
+    def get_estimated_num_noise_spans(self, seq_len: int) -> int:
+        return 1
+
+    def get_estimated_infilling_seq_length(self, seq_len: int) -> int:
+        # [MASK] + <SEP>
+        return seq_len + 2
+
+
 class RandomSpanMasking(InfillingMasking):
     def __init__(self, corruption_rate: float = 0.15, mean_span_length: int = 5):
         super().__init__()

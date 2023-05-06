@@ -20,6 +20,7 @@ from .dataset import (
     RandomNgramMasking,
     RandomSpanMasking,
     SingleSpanMasking,
+    VariableSpanMasking,
 )
 from .module import CompoundTokenFuser
 from .utils import gumbel_sample
@@ -316,6 +317,8 @@ def get_masking(
             return SingleSpanMasking(corruption_rate=corruption_rate)
         elif kind == "fixed_bar":
             return FixedBarMasking(num_past_bars=6, num_middle_bars=4, num_future_bars=6, random_crop=random_crop)
+        elif kind == "variable":
+            return VariableSpanMasking()
         else:
             raise ValueError(f"Unknown infilling kind: {kind}")
 

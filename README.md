@@ -78,7 +78,8 @@ python compute_metric.py --test_dir ../dataset/clm_test --generated_dir ../music
 
 ### 4 Deploy
 ```bash
-python production/convert_checkpoint.py --checkpoint_path experiment/ablation_infilling/model/ngram-multi-single_60/finetune_clm/lightning_logs/version_0/checkpoints/best.ckpt --config_path experiment/ablation_infilling/model/ngram-multi-single_60/finetune_clm/lightning_logs/version_0/config.yaml --output_path experiment/production/melodyglm_finetuned_completion_small.ckpt
+python production/convert_checkpoint.py --checkpoint_path experiment/final/model/ngram-multi-single_60/finetune_clm/lightning_logs/version_0/checkpoints/epoch=9.ckpt --config_path experiment/final/model/ngram-multi-single_60/finetune_clm/lightning_logs/version_0/config.yaml --output_path experiment/production/melodyglm_base_completion.ckpt
+python production/convert_checkpoint.py --checkpoint_path experiment/final/model/ngram-multi-single_60/finetune_inpainting/lightning_logs/version_0/checkpoints/epoch=9.ckpt --config_path experiment/final/model/ngram-multi-single_60/finetune_inpainting/lightning_logs/version_0/config.yaml --output_path experiment/production/melodyglm_base_inpainting.ckpt
 ```
 
 ## Dependencies
