@@ -108,6 +108,7 @@ if __name__ == "__main__":
     parser.add_argument("--granularity", type=int, default=64)
     parser.add_argument("--max_bar", type=int, default=128)
     parser.add_argument("--pitch_range", type=int, nargs=2, default=(0, 128))
+    parser.add_argument("--add_segment_token", action="store_true")
     parser.add_argument("--ngram_length", type=int)
     parser.add_argument("--ngram_top_p", type=float)
     parser.add_argument("--mixed_ngram_dir", type=str)
@@ -140,6 +141,7 @@ if __name__ == "__main__":
         granularity=args.granularity,
         max_bar=args.max_bar,
         pitch_range=args.pitch_range,
+        add_segment_token=args.add_segment_token,
     )
     # save tokenizer config for later use
     config_path = os.path.join(args.dataset_dir, "tokenizer_config.json")

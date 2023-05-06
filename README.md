@@ -17,28 +17,32 @@ python lexicon.py prepare --length 12 --ngram_kind bar_onset --ngram_dir experim
 ### 2 Prepare dataset
 (Keep tokenizer configs the same between pretrain and finetune stages.)
 ```bash
-python prepare_data.py --kind octuple --granularity 64 --max_bar 128 --pitch_range 0 128 --ngram_length 12 --ngram_top_p 0.3 \
+python prepare_data.py --kind octuple --granularity 64 --max_bar 128 --pitch_range 0 128 --ngram_length 12 --ngram_top_p 0.3 --add_segment_token \
 --midi_dir ../dataset/melodynet_old --dataset_dir experiment/dataset/melodynet \
 --pitch_ngram_dir experiment/dataset/melodynet/ngram/label_pitch \
 --rhythm_ngram_dir experiment/dataset/melodynet/ngram/label_rhythm
 
-python prepare_data.py --kind octuple --granularity 64 --max_bar 128 --pitch_range 0 128 --ngram_length 12 --ngram_top_p 0.3 \
+python prepare_data.py --kind octuple --granularity 64 --max_bar 128 --pitch_range 0 128 --ngram_length 12 --ngram_top_p 0.3 --add_segment_token \
 --midi_dir ../dataset/melodynet_old --dataset_dir experiment/dataset/melodynet_ngram_mixed \
 --mixed_ngram_dir experiment/dataset/melodynet/ngram/label_mixed;\
-python prepare_data.py --kind octuple --granularity 64 --max_bar 128 --pitch_range 0 128 --ngram_length 8 --ngram_top_p 0.3 \
+python prepare_data.py --kind octuple --granularity 64 --max_bar 128 --pitch_range 0 128 --ngram_length 8 --ngram_top_p 0.3 --add_segment_token \
 --midi_dir ../dataset/melodynet_old --dataset_dir experiment/dataset/melodynet_ngram_8 \
 --pitch_ngram_dir experiment/dataset/melodynet/ngram/label_pitch \
 --rhythm_ngram_dir experiment/dataset/melodynet/ngram/label_rhythm;\
-python prepare_data.py --kind octuple --granularity 64 --max_bar 128 --pitch_range 0 128 --ngram_length 4 --ngram_top_p 0.3 \
+python prepare_data.py --kind octuple --granularity 64 --max_bar 128 --pitch_range 0 128 --ngram_length 4 --ngram_top_p 0.3 --add_segment_token \
 --midi_dir ../dataset/melodynet_old --dataset_dir experiment/dataset/melodynet_ngram_4 \
 --pitch_ngram_dir experiment/dataset/melodynet/ngram/label_pitch \
 --rhythm_ngram_dir experiment/dataset/melodynet/ngram/label_rhythm
 
-python prepare_data.py --kind octuple --granularity 64 --max_bar 128 --pitch_range 0 128 --include_empty_bar \
+python prepare_data.py --kind octuple --granularity 64 --max_bar 128 --pitch_range 0 128 --include_empty_bar --add_segment_token \
 --midi_dir ../dataset/wikifonia --dataset_dir experiment/dataset/wikifonia
 
+python prepare_data.py --kind octuple --granularity 64 --max_bar 128 --pitch_range 0 128 --ngram_length 12 --ngram_top_p 0.3 \
+--midi_dir ../dataset/melodynet_old --dataset_dir experiment/dataset/melodynet_noseg \
+--pitch_ngram_dir experiment/dataset/melodynet/ngram/label_pitch \
+--rhythm_ngram_dir experiment/dataset/melodynet/ngram/label_rhythm
 python prepare_data.py --kind octuple --granularity 64 --max_bar 128 --pitch_range 0 128 --include_empty_bar \
---midi_dir experiment/dataset/infilling_comparison/midi --dataset_dir experiment/dataset/infilling_comparison
+--midi_dir ../dataset/wikifonia --dataset_dir experiment/dataset/wikifonia_noseg
 ```
 
 ### 3 Pretrain
@@ -51,6 +55,7 @@ python generate_script.py --dataset_dir experiment/dataset/melodynet --experimen
 experiment/ablation_infilling/script/run.sh
 experiment/ablation_other/script/run.sh
 experiment/ablation_ngram/script/run.sh
+experiment/ablation_repr/script/run.sh
 experiment/final/script/run.sh
 
 experiment/final/script/generate.sh

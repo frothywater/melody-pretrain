@@ -21,7 +21,13 @@ class MIDITokenizer:
 
         pass
 
-    def __init__(self, granularity: int = 64, max_bar: int = 128, pitch_range: Tuple[int, int] = (0, 128)) -> None:
+    def __init__(
+        self,
+        granularity: int = 64,
+        max_bar: int = 128,
+        pitch_range: Tuple[int, int] = (0, 128),
+        add_segment_token: bool = True,
+    ) -> None:
         """Initialize a MIDITokenizer instance.
         Args:
             granularity: The number of units per bar. Defaults to 64 (64-th note).
@@ -29,6 +35,7 @@ class MIDITokenizer:
             pitch_range: The range of pitch token to use. Defaults to (0, 128)."""
         self.granularity = granularity
         self.max_bar = max_bar
+        self.add_segment_token = add_segment_token
 
         # define bins for each field
         self.pitch_range = range(pitch_range[0], pitch_range[1])
@@ -311,6 +318,7 @@ class MIDITokenizer:
             "granularity": self.granularity,
             "max_bar": self.max_bar,
             "pitch_range": [self.pitch_range.start, self.pitch_range.stop],
+            "add_segment_token": self.add_segment_token,
         }
         with open(path, "w") as f:
             json.dump(config, f)
@@ -373,7 +381,10 @@ class OctupleTokenizer(MIDITokenizer):
         assert len(midi.instruments) == 1, "Only support single instrument midi file."
 
         notes = midi.instruments[0].notes
-        segment_note_indices = self.get_segment_note_indices(midi)
+        if self.add_segment_token:
+            segment_note_indices = self.get_segment_note_indices(midi)
+        else:
+            segment_note_indices = []
 
         current_tempo_index = 0
         tempo_changes = self._get_tempo_changes(midi)
