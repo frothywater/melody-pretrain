@@ -3,7 +3,6 @@
 Include feature extractor and musically informed objective measures.
 Copied from: https://github.com/RichardYang40148/mgeval
 """
-import io
 import math
 
 import midi
@@ -293,9 +292,8 @@ class metrics(object):
         resolution = pattern.resolution
         total_used_note = self.total_used_note(feature, track_num=track_num)
         d_note = np.zeros((max(total_used_note - 1, 0)))
-        # if total_used_note == 0:
-        # return 0
-        # d_note = np.zeros((total_used_note - 1))
+        if total_used_note <= 1:
+            return 0
         current_note = 0
         counter = 0
         for i in range(0, len(pattern[track_num])):
@@ -326,6 +324,10 @@ class metrics(object):
         ioi = np.diff(onset)
         avg_ioi = np.mean(ioi)
         return avg_ioi
+
+    def IOI_hist(self, feature):
+        midi_obj: pretty_midi.PrettyMIDI = feature["pretty_midi"]
+        midi_obj.get_onsets()
 
     def note_length_hist(self, feature, track_num=1, normalize=True, pause_event=False):
         """

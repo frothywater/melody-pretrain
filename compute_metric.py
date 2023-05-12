@@ -1,9 +1,7 @@
-import glob
 import os
 from argparse import ArgumentParser
-from typing import Dict
-
-from miditoolkit import MidiFile
+from glob import glob
+from typing import Dict, List
 
 from metric.metrics import compute_all_metrics_for_models
 
@@ -17,59 +15,94 @@ def split_sample_number(file: str):
 def main():
     parser = ArgumentParser()
     parser.add_argument("--test_dir", type=str, required=True)
-    parser.add_argument("--generated_dir", type=str, required=True)
+    parser.add_argument("--generated_dir", type=str)
+    parser.add_argument("--generated_group_dir", type=str)
     parser.add_argument("--dest_path", type=str, required=True)
     parser.add_argument("--force_filename", action="store_true")
-    parser.add_argument("--check_empty", action="store_true")
     args = parser.parse_args()
 
-    test_files = glob.glob(args.test_dir + "/**/*.mid", recursive=True)
-    generated_files = glob.glob(args.generated_dir + "/**/*.mid", recursive=True)
+    if args.generated_dir is None and args.generated_group_dir is None:
+        raise ValueError("Either --generated_dir or --generated_group_dir must be specified")
+
+    test_files = glob(args.test_dir + "/**/*.mid", recursive=True)
     test_basenames = [os.path.basename(file).replace(".mid", "") for file in test_files]
 
+    # scan generated files
+    print("Scanning generated files...")
+    generated_by_model: Dict[str, List[str]] = {}
+    if args.generated_dir is not None:
+        generated_files = glob(args.generated_dir + "/**/*.mid", recursive=True)
+        last_path_component = os.path.basename(os.path.normpath(args.generated_dir))
+        generated_by_model[last_path_component] = generated_files
+    elif args.generated_group_dir is not None:
+        for dir in os.listdir(args.generated_group_dir):
+            model_dir = os.path.join(args.generated_group_dir, dir)
+            generated_by_model[dir] = glob(model_dir + "/**/*.mid", recursive=True)
+
+    def group_by_name_and_sample_number(files: List[str]):
+        result: Dict[str, Dict[int, str]] = {}
+        if args.force_filename:
+            for file in files:
+                name, sample_number = split_sample_number(file)
+                if name not in result:
+                    result[name] = {}
+                result[name][sample_number] = file
+        else:
+            # if don't care about correspondence, group by the number of test files
+            if len(files) % len(test_files) != 0:
+                raise ValueError(
+                    f"Number of generated files {len(files)} is not a multiple of test files {len(test_files)}"
+                )
+            sample_count = len(files) // len(test_files)
+            for file_index in range(len(test_files)):
+                result[file_index] = {
+                    sample_index: files[sample_index * len(test_files) + file_index]
+                    for sample_index in range(sample_count)
+                }
+        return result
+
     # group generated files by name and sample number
-    grouped_generated_files: Dict[str, Dict[int, str]] = {}
-    for file in generated_files:
-        name, sample_number = split_sample_number(file)
-        if name not in grouped_generated_files:
-            grouped_generated_files[name] = {}
-        grouped_generated_files[name][sample_number] = file
+    # {model: {name: {sample_number: file}}}
+    print("Grouping generated files by name and sample number...")
+    generated_dict = {model: group_by_name_and_sample_number(files) for model, files in generated_by_model.items()}
 
     # check if all generated files are sampled the same number of times
-    times_sampled = len(next(iter(grouped_generated_files.values())))
-    for name, group in grouped_generated_files.items():
-        if len(group) != times_sampled:
-            raise ValueError(f"Generated files for {name} are not sampled the same number of times {times_sampled}")
+    print("Checking if all generated files are sampled the same number of times...")
+    first_model = next(iter(generated_dict.values()))
+    first_name = next(iter(first_model.values()))
+    times_sampled = len(first_name)
+    for model, model_dict in generated_dict.items():
+        for name, group in model_dict.items():
+            if len(group) != times_sampled:
+                raise ValueError(
+                    f"Generated files for {model}/{name} are not sampled the same number of times {times_sampled}"
+                )
 
-    if args.force_filename:
-        # check if all test files have a corresponding generated file
-        generated_names = set(grouped_generated_files.keys())
-        if generated_names != set(test_basenames):
-            raise ValueError(f"Generated names {generated_names} do not match test names {test_basenames}")
-    else:
-        # check if number of one generated file group is equal to number of test files
-        if len(grouped_generated_files) != len(test_files):
-            raise ValueError(
-                f"Number of generated files {len(grouped_generated_files)} does not match number of test files {len(test_files)}"
-            )
+    def check_group(grouped_generated_files: Dict[str, Dict[int, str]]):
+        if args.force_filename:
+            # check if all test files have a corresponding generated file
+            generated_names = set(grouped_generated_files.keys())
+            if generated_names != set(test_basenames):
+                raise ValueError(f"Generated names {generated_names} do not match test names {test_basenames}")
 
-    # check empty midi files
-    if args.check_empty:
-        for group in grouped_generated_files.values():
-            for file in group.values():
-                midi = MidiFile(file)
-                if len(midi.instruments) == 0 or len(midi.instruments[0].notes) <= 1:
-                    print(f"Warning: generated file {file} is empty")
+    # check if all groups are valid
+    print("Checking if all groups are valid...")
+    for group in generated_dict.values():
+        check_group(group)
 
+    # pack generated files by all models and sample number into a dict
     generated_files_dict = {
-        sample_number: [grouped_generated_files[name][sample_number] for name in grouped_generated_files]
+        f"{model}/{sample_number}": [model_dict[name][sample_number] for name in model_dict]
+        for model, model_dict in generated_dict.items()
         for sample_number in range(times_sampled)
     }
 
     # compute metrics
     df = compute_all_metrics_for_models(test_files, generated_files_dict)
 
-    df = df.rename(columns={"model": "group"})
+    # split model name and sample number into separate columns
+    df[["model", "sample"]] = df["model"].str.split("/", 1, expand=True)
+
     csv_path = os.path.join(args.dest_path)
     os.makedirs(os.path.dirname(csv_path), exist_ok=True)
     df.to_csv(csv_path, index=False)
