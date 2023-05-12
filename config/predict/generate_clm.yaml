@@ -4,7 +4,7 @@ trainer:
   callbacks: CustomWriter
   logger: false
   enable_checkpointing: false
-  devices: "1,"
+  devices: 1
   accelerator: gpu
   precision: 16-mixed
   strategy: ddp
@@ -16,14 +16,10 @@ model:
     prediction_bar_length: 32
     temperature: 0.9
     top_k: 10
+    times_to_predict: 70
 data:
   dataset_dir: experiment/dataset/wikifonia
   batch_size: 1
   num_workers: 4
-  pitch_augumentation: false
-  times_to_predict: 5
-task:
-  class_path: LanguageModelingTask
-  init_args:
-    seq_len: 512
-    padding_only: true
+  empty: true
+  length: 25

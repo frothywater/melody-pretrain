@@ -1,0 +1,11 @@
+data:
+  dataset_dir: experiment/dataset/melodynet
+  load_bar_data: true
+model:
+  dataset_dir: experiment/dataset/melodynet
+task:
+- class_path: InfillingTask
+  init_args:
+    corruption_rate: 0.6
+    kind: bar
+    seq_len: 256

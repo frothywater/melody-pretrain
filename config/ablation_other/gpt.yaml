@@ -1,0 +1,8 @@
+data:
+  dataset_dir: experiment/dataset/melodynet
+model:
+  dataset_dir: experiment/dataset/melodynet
+task:
+  class_path: LanguageModelingTask
+  init_args:
+    seq_len: 256

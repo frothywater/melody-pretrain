@@ -1,0 +1,10 @@
+data:
+  dataset_dir: experiment/dataset/melodynet
+model:
+  dataset_dir: experiment/dataset/melodynet
+task:
+- class_path: InfillingTask
+  init_args:
+    corruption_rate: 0.2
+    kind: span
+    seq_len: 256

@@ -1,0 +1,4 @@
+data:
+  dataset_dir: experiment/dataset/wikifonia_noseg
+model:
+  dataset_dir: experiment/dataset/wikifonia_noseg

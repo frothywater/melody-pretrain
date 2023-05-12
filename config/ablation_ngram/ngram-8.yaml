@@ -1,0 +1,16 @@
+data:
+  dataset_dir: experiment/dataset/melodynet_ngram_8
+  load_ngram_data: true
+model:
+  dataset_dir: experiment/dataset/melodynet_ngram_8
+task:
+- class_path: InfillingTask
+  init_args:
+    corruption_rate: 0.6
+    kind: pitch_ngram
+    seq_len: 256
+- class_path: InfillingTask
+  init_args:
+    corruption_rate: 0.6
+    kind: rhythm_ngram
+    seq_len: 256

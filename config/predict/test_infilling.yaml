@@ -1,8 +1,8 @@
 # lightning.pytorch==1.8.3.post1
 trainer:
-  devices: "1,"
+  devices: 1
 model:
-  class_path: melody_pretrain.model.MelodyTestingModel
+  class_path: MelodyTestingModel
   init_args:
     dataset_dir: experiment/dataset/wikifonia
 data:

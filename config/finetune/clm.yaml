@@ -1,25 +1,26 @@
 # lightning.pytorch==1.8.3.post1
 trainer:
-  max_steps: -1
-  max_epochs: 20
-  devices: "1,"
+  max_steps: 20000
+  devices: 2
   accumulate_grad_batches: 1
+  val_check_interval: 200
+  check_val_every_n_epoch:
   callbacks:
     - class_path: LearningRateMonitor
       init_args:
         logging_interval: step
     - class_path: ModelCheckpoint
       init_args:
-        save_top_k: -1
-        every_n_epochs: 5
-        every_n_train_steps:
+        monitor: val_loss
+        every_n_train_steps: 200
+        save_last: true
         save_weights_only: true
-        filename: "{epoch}"
+        filename: "best"
 model:
-  lr: 1e-5
+  lr: 3e-5
   dataset_dir: experiment/dataset/wikifonia
 data:
-  batch_size: 8
+  batch_size: 4
   dataset_dir: experiment/dataset/wikifonia
 task:
   class_path: LanguageModelingTask

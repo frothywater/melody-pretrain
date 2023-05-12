@@ -1,0 +1,11 @@
+data:
+  dataset_dir: experiment/dataset/melodynet_ngram_mixed
+  load_ngram_data: true
+model:
+  dataset_dir: experiment/dataset/melodynet_ngram_mixed
+task:
+- class_path: InfillingTask
+  init_args:
+    corruption_rate: 0.6
+    kind: ngram
+    seq_len: 256

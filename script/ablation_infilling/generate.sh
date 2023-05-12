@@ -1,0 +1,54 @@
+# bar_80
+python main.py predict --config config/model/small.yaml --config config/predict/generate_clm.yaml --trainer.default_root_dir experiment/ablation_infilling/model/bar_80/finetune_clm --ckpt_path experiment/ablation_infilling/model/bar_80/finetune_clm/lightning_logs/version_0/checkpoints/best.ckpt --trainer.callbacks.output_dir experiment/ablation_infilling/generated/clm/bar_80_best
+# span_80
+python main.py predict --config config/model/small.yaml --config config/predict/generate_clm.yaml --trainer.default_root_dir experiment/ablation_infilling/model/span_80/finetune_clm --ckpt_path experiment/ablation_infilling/model/span_80/finetune_clm/lightning_logs/version_0/checkpoints/best.ckpt --trainer.callbacks.output_dir experiment/ablation_infilling/generated/clm/span_80_best
+# single_80
+python main.py predict --config config/model/small.yaml --config config/predict/generate_clm.yaml --trainer.default_root_dir experiment/ablation_infilling/model/single_80/finetune_clm --ckpt_path experiment/ablation_infilling/model/single_80/finetune_clm/lightning_logs/version_0/checkpoints/best.ckpt --trainer.callbacks.output_dir experiment/ablation_infilling/generated/clm/single_80_best
+# ngram-multi_80
+python main.py predict --config config/model/small.yaml --config config/predict/generate_clm.yaml --trainer.default_root_dir experiment/ablation_infilling/model/ngram-multi_80/finetune_clm --ckpt_path experiment/ablation_infilling/model/ngram-multi_80/finetune_clm/lightning_logs/version_0/checkpoints/best.ckpt --trainer.callbacks.output_dir experiment/ablation_infilling/generated/clm/ngram-multi_80_best
+# ngram-multi-single_60
+python main.py predict --config config/model/small.yaml --config config/predict/generate_clm.yaml --trainer.default_root_dir experiment/ablation_infilling/model/ngram-multi-single_60/finetune_clm --ckpt_path experiment/ablation_infilling/model/ngram-multi-single_60/finetune_clm/lightning_logs/version_0/checkpoints/best.ckpt --trainer.callbacks.output_dir experiment/ablation_infilling/generated/clm/ngram-multi-single_60_best
+# ngram-multi-single-permute_60
+python main.py predict --config config/model/small.yaml --config config/predict/generate_clm.yaml --trainer.default_root_dir experiment/ablation_infilling/model/ngram-multi-single-permute_60/finetune_clm --ckpt_path experiment/ablation_infilling/model/ngram-multi-single-permute_60/finetune_clm/lightning_logs/version_0/checkpoints/best.ckpt --trainer.callbacks.output_dir experiment/ablation_infilling/generated/clm/ngram-multi-single-permute_60_best
+
+# bar_60
+python main.py predict --config config/model/small.yaml --config config/predict/generate_infilling.yaml --trainer.default_root_dir experiment/ablation_infilling/model/bar_60/finetune_infilling --ckpt_path experiment/ablation_infilling/model/bar_60/finetune_infilling/lightning_logs/version_0/checkpoints/best.ckpt --trainer.callbacks.output_dir experiment/ablation_infilling/generated/infilling/bar_60_best
+# span_80
+python main.py predict --config config/model/small.yaml --config config/predict/generate_infilling.yaml --trainer.default_root_dir experiment/ablation_infilling/model/span_80/finetune_infilling --ckpt_path experiment/ablation_infilling/model/span_80/finetune_infilling/lightning_logs/version_0/checkpoints/best.ckpt --trainer.callbacks.output_dir experiment/ablation_infilling/generated/infilling/span_80_best
+# single_40
+python main.py predict --config config/model/small.yaml --config config/predict/generate_infilling.yaml --trainer.default_root_dir experiment/ablation_infilling/model/single_40/finetune_infilling --ckpt_path experiment/ablation_infilling/model/single_40/finetune_infilling/lightning_logs/version_0/checkpoints/best.ckpt --trainer.callbacks.output_dir experiment/ablation_infilling/generated/infilling/single_40_best
+# ngram-multi_40
+python main.py predict --config config/model/small.yaml --config config/predict/generate_infilling.yaml --trainer.default_root_dir experiment/ablation_infilling/model/ngram-multi_40/finetune_infilling --ckpt_path experiment/ablation_infilling/model/ngram-multi_40/finetune_infilling/lightning_logs/version_0/checkpoints/best.ckpt --trainer.callbacks.output_dir experiment/ablation_infilling/generated/infilling/ngram-multi_40_best
+# ngram-multi-single_60
+python main.py predict --config config/model/small.yaml --config config/predict/generate_infilling.yaml --trainer.default_root_dir experiment/ablation_infilling/model/ngram-multi-single_60/finetune_infilling --ckpt_path experiment/ablation_infilling/model/ngram-multi-single_60/finetune_infilling/lightning_logs/version_0/checkpoints/best.ckpt --trainer.callbacks.output_dir experiment/ablation_infilling/generated/infilling/ngram-multi-single_60_best
+# ngram-multi-single-permute_60
+python main.py predict --config config/model/small.yaml --config config/predict/generate_infilling.yaml --trainer.default_root_dir experiment/ablation_infilling/model/ngram-multi-single-permute_60/finetune_infilling --ckpt_path experiment/ablation_infilling/model/ngram-multi-single-permute_60/finetune_infilling/lightning_logs/version_0/checkpoints/best.ckpt --trainer.callbacks.output_dir experiment/ablation_infilling/generated/infilling/ngram-multi-single-permute_60_best
+
+# bar_80
+python main.py predict --config config/model/small.yaml --config config/predict/generate_clm.yaml --trainer.default_root_dir experiment/ablation_infilling/model/bar_80/finetune_clm --ckpt_path experiment/ablation_infilling/model/bar_80/finetune_clm/lightning_logs/version_0/checkpoints/last.ckpt --trainer.callbacks.output_dir experiment/ablation_infilling/generated/clm/bar_80
+# span_80
+python main.py predict --config config/model/small.yaml --config config/predict/generate_clm.yaml --trainer.default_root_dir experiment/ablation_infilling/model/span_80/finetune_clm --ckpt_path experiment/ablation_infilling/model/span_80/finetune_clm/lightning_logs/version_0/checkpoints/last.ckpt --trainer.callbacks.output_dir experiment/ablation_infilling/generated/clm/span_80
+# single_80
+python main.py predict --config config/model/small.yaml --config config/predict/generate_clm.yaml --trainer.default_root_dir experiment/ablation_infilling/model/single_80/finetune_clm --ckpt_path experiment/ablation_infilling/model/single_80/finetune_clm/lightning_logs/version_0/checkpoints/last.ckpt --trainer.callbacks.output_dir experiment/ablation_infilling/generated/clm/single_80
+# ngram-multi_80
+python main.py predict --config config/model/small.yaml --config config/predict/generate_clm.yaml --trainer.default_root_dir experiment/ablation_infilling/model/ngram-multi_80/finetune_clm --ckpt_path experiment/ablation_infilling/model/ngram-multi_80/finetune_clm/lightning_logs/version_0/checkpoints/last.ckpt --trainer.callbacks.output_dir experiment/ablation_infilling/generated/clm/ngram-multi_80
+# ngram-multi-single_60
+python main.py predict --config config/model/small.yaml --config config/predict/generate_clm.yaml --trainer.default_root_dir experiment/ablation_infilling/model/ngram-multi-single_60/finetune_clm --ckpt_path experiment/ablation_infilling/model/ngram-multi-single_60/finetune_clm/lightning_logs/version_0/checkpoints/last.ckpt --trainer.callbacks.output_dir experiment/ablation_infilling/generated/clm/ngram-multi-single_60
+# ngram-multi-single-permute_60
+python main.py predict --config config/model/small.yaml --config config/predict/generate_clm.yaml --trainer.default_root_dir experiment/ablation_infilling/model/ngram-multi-single-permute_60/finetune_clm --ckpt_path experiment/ablation_infilling/model/ngram-multi-single-permute_60/finetune_clm/lightning_logs/version_0/checkpoints/last.ckpt --trainer.callbacks.output_dir experiment/ablation_infilling/generated/clm/ngram-multi-single-permute_60
+
+# bar_60
+python main.py predict --config config/model/small.yaml --config config/predict/generate_infilling.yaml --trainer.default_root_dir experiment/ablation_infilling/model/bar_60/finetune_infilling --ckpt_path experiment/ablation_infilling/model/bar_60/finetune_infilling/lightning_logs/version_0/checkpoints/last.ckpt --trainer.callbacks.output_dir experiment/ablation_infilling/generated/infilling/bar_60
+# span_80
+python main.py predict --config config/model/small.yaml --config config/predict/generate_infilling.yaml --trainer.default_root_dir experiment/ablation_infilling/model/span_80/finetune_infilling --ckpt_path experiment/ablation_infilling/model/span_80/finetune_infilling/lightning_logs/version_0/checkpoints/last.ckpt --trainer.callbacks.output_dir experiment/ablation_infilling/generated/infilling/span_80
+# single_40
+python main.py predict --config config/model/small.yaml --config config/predict/generate_infilling.yaml --trainer.default_root_dir experiment/ablation_infilling/model/single_40/finetune_infilling --ckpt_path experiment/ablation_infilling/model/single_40/finetune_infilling/lightning_logs/version_0/checkpoints/last.ckpt --trainer.callbacks.output_dir experiment/ablation_infilling/generated/infilling/single_40
+# ngram-multi_40
+python main.py predict --config config/model/small.yaml --config config/predict/generate_infilling.yaml --trainer.default_root_dir experiment/ablation_infilling/model/ngram-multi_40/finetune_infilling --ckpt_path experiment/ablation_infilling/model/ngram-multi_40/finetune_infilling/lightning_logs/version_0/checkpoints/last.ckpt --trainer.callbacks.output_dir experiment/ablation_infilling/generated/infilling/ngram-multi_40
+# ngram-multi-single_60
+python main.py predict --config config/model/small.yaml --config config/predict/generate_infilling.yaml --trainer.default_root_dir experiment/ablation_infilling/model/ngram-multi-single_60/finetune_infilling --ckpt_path experiment/ablation_infilling/model/ngram-multi-single_60/finetune_infilling/lightning_logs/version_0/checkpoints/last.ckpt --trainer.callbacks.output_dir experiment/ablation_infilling/generated/infilling/ngram-multi-single_60
+# ngram-multi-single-permute_60
+python main.py predict --config config/model/small.yaml --config config/predict/generate_infilling.yaml --trainer.default_root_dir experiment/ablation_infilling/model/ngram-multi-single-permute_60/finetune_infilling --ckpt_path experiment/ablation_infilling/model/ngram-multi-single-permute_60/finetune_infilling/lightning_logs/version_0/checkpoints/last.ckpt --trainer.callbacks.output_dir experiment/ablation_infilling/generated/infilling/ngram-multi-single-permute_60
+
+python compute_metric.py --test_dir ../dataset/clm_test --generated_group_dir experiment/ablation_infilling/generated/clm --dest_path experiment/ablation_infilling/result/clm.csv
+python compute_metric.py --test_dir ../dataset/infilling_test --generated_group_dir experiment/ablation_infilling/generated/infilling --dest_path experiment/ablation_infilling/result/infilling.csv --force_filename

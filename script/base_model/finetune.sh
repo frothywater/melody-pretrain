@@ -1,0 +1,7 @@
+# seg
+python main.py fit --config config/trainer.yaml --config config/model/base.yaml --config config/finetune/clm.yaml --trainer.default_root_dir experiment/base_model/model/seg/finetune_clm --load_from_checkpoint experiment/base_model/model/seg/pretrain/lightning_logs/version_0/checkpoints/step=100000.ckpt
+python main.py fit --config config/trainer.yaml --config config/model/base.yaml --config config/finetune/infilling.yaml --trainer.default_root_dir experiment/base_model/model/seg/finetune_infilling --load_from_checkpoint experiment/base_model/model/seg/pretrain/lightning_logs/version_0/checkpoints/step=100000.ckpt
+
+# noseg
+python main.py fit --config config/trainer.yaml --config config/model/base.yaml --config config/finetune/clm.yaml --config config/base_model/noseg_data.yaml --trainer.default_root_dir experiment/base_model/model/noseg/finetune_clm --load_from_checkpoint experiment/base_model/model/noseg/pretrain/lightning_logs/version_0/checkpoints/step=100000.ckpt
+python main.py fit --config config/trainer.yaml --config config/model/base.yaml --config config/finetune/infilling.yaml --config config/base_model/noseg_data.yaml --trainer.default_root_dir experiment/base_model/model/noseg/finetune_infilling --load_from_checkpoint experiment/base_model/model/noseg/pretrain/lightning_logs/version_0/checkpoints/step=100000.ckpt
