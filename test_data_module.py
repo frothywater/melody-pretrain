@@ -15,10 +15,11 @@ from melody_pretrain.dataset import (
     RandomNgramMasking,
     RandomSpanMasking,
     SingleSpanMasking,
+    VariableSpanMasking,
 )
 from melody_pretrain.tokenizer import MIDITokenizer
 
-dataset_dir = "experiment/dataset/melodynet"
+dataset_dir = "experiment/dataset/wikifonia"
 
 
 def get_data_module(mask: str):
@@ -32,6 +33,8 @@ def get_data_module(mask: str):
         masking = RandomNgramMasking(corruption_rate=0.5, extra_data_field_name="pitch_ngrams")
     elif mask == "fixed_bar":
         masking = FixedBarMasking(6, 4, 6)
+    elif mask == "variable":
+        masking = VariableSpanMasking()
     data_collator = DataCollatorForInfilling(
         masking=masking,
         seq_len=50,
@@ -68,7 +71,7 @@ if __name__ == "__main__":
         if batch.source_lengths is not None:
             print("source_length:", batch.source_lengths[0], file=file)
 
-    maskings = ["span", "bar", "single", "ngram"]
+    maskings = ["span", "bar", "single", "fixed_bar", "variable"]
     for mask in maskings:
         print(f"masking: {mask}")
         data_module = get_data_module(mask)
