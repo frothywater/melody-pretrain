@@ -607,6 +607,18 @@ class MelodyGLM(nn.Module):
         top_p: float = 1.0,
         temperature: float = 1.0,
     ) -> MidiFile:
+        """
+        Complete a melody from scratch or from a prompt MIDI file.
+        Args:
+            prompt_midi_file: The path to the prompt MIDI file.
+            max_length: The maximum length of the generated sequence.
+            max_bar_length: The maximum bar length of the generated sequence, optional.
+            top_k: The number of highest probability vocabulary tokens to keep for top-k sampling, optional.
+            top_p: The cumulative probability of highest probability vocabulary tokens to keep for top-p sampling, optional.
+            temperature: The temperature used to scale the logits, optional.
+        Returns:
+            The generated MIDI file.
+        """
         if prompt_midi_file is not None:
             midi_file = MidiFile(prompt_midi_file)
             token_ids, _ = self.tokenizer.encode(midi_file)
@@ -642,6 +654,19 @@ class MelodyGLM(nn.Module):
         top_p: float = 1.0,
         temperature: float = 1.0,
     ) -> MidiFile:
+        """
+        Inpaint a melody from a prompt MIDI file with missing bars or notes.
+        Args:
+            prompt_midi_file: The path to the prompt MIDI file.
+            bar_range: The range of bars to inpaint. (Either bar_range or note_range should be provided.)
+            note_range: The range of notes to inpaint. (Either bar_range or note_range should be provided.)
+            max_length: The maximum length of the generated sequence.
+            top_k: The number of highest probability vocabulary tokens to keep for top-k sampling, optional.
+            top_p: The cumulative probability of highest probability vocabulary tokens to keep for top-p sampling, optional.
+            temperature: The temperature used to scale the logits, optional.
+        Returns:
+            The generated MIDI file.
+        """
         if (bar_range is None) and (note_range is None) or (bar_range is not None) and (note_range is not None):
             raise ValueError("Either bar_range or note_range should be provided, but not both")
 
