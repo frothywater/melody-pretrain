@@ -1,4 +1,3 @@
-import os
 from typing import List, Optional, Union
 
 import torch
@@ -10,9 +9,9 @@ from .dataset import (
     DataCollator,
     DataCollatorForCausalLanguageModeling,
     DataCollatorForFixedInfilling,
+    DataCollatorForInfilling,
     DataCollatorForMaskedLanguageModeling,
     DataCollatorForPaddingOnly,
-    DataCollatorForInfilling,
     DataCollatorForRecovery,
     FixedBarMasking,
     MultiTargetInfillingMasking,
@@ -48,18 +47,16 @@ class LanguageModelingTask(TrainingTask):
         task_name: str = "clm",
         weight: float = 1.0,
         random_crop: bool = True,
-        empty: bool = False,
         padding_only: bool = False,
     ):
         super().__init__(task_name, weight)
         self.seq_len = seq_len
-        self.empty = empty
         self.random_crop = random_crop
         self.padding_only = padding_only
 
     def get_data_collator(self) -> DataCollator:
         if self.padding_only:
-            return DataCollatorForPaddingOnly(seq_len=self.seq_len, empty=self.empty)
+            return DataCollatorForPaddingOnly(seq_len=self.seq_len)
         return DataCollatorForCausalLanguageModeling(seq_len=self.seq_len, random_crop=self.random_crop)
 
     def __call__(self, model, batch: DataBatch, **kwargs) -> torch.Tensor:

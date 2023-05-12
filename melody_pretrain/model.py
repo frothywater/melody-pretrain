@@ -2,6 +2,7 @@ import os
 from typing import Dict, List, Optional, Sequence, Tuple, Union
 
 import lightning as pl
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -52,6 +53,7 @@ class MelodyModel(pl.LightningModule):
         self.dropout = dropout
 
         self.default_seq_len = 512
+        self.prefix_source_length = self.default_seq_len
 
         self.fuser = CompoundTokenFuser(self.tokenizer, embedding_dim, model_dim)
 
@@ -79,9 +81,8 @@ class MelodyModel(pl.LightningModule):
         return torch.triu(torch.ones((length, length), dtype=torch.bool, device=self.device), diagonal=1)
 
     def _get_causal_attention_mask(self, length: int) -> torch.Tensor:
-        if not hasattr(self, "causal_attention_mask"):
-            self.causal_attention_mask = self._create_causal_attention_mask(length=self.default_seq_len)
-        assert length <= self.causal_attention_mask.shape[0]
+        if not hasattr(self, "causal_attention_mask") or self.causal_attention_mask.shape[0] < length:
+            self.causal_attention_mask = self._create_causal_attention_mask(max(length, self.default_seq_len))
         return self.causal_attention_mask[:length, :length]
 
     def _create_prefix_attention_mask(self, source_length: int, length: int) -> torch.Tensor:
@@ -100,13 +101,15 @@ class MelodyModel(pl.LightningModule):
         return torch.cat([left_prefix_part, right_target_part], dim=1)
 
     def _get_prefix_attention_mask(self, source_length: int, length: int) -> torch.Tensor:
-        if not hasattr(self, "prefix_attention_mask"):
-            self.prefix_attention_mask = self._create_prefix_attention_mask(
-                source_length=self.default_seq_len, length=3 * self.default_seq_len
-            )
-            self.prefix_source_length = self.default_seq_len
-
-        assert source_length <= self.prefix_source_length and length <= self.prefix_attention_mask.shape[0]
+        if (
+            not hasattr(self, "prefix_attention_mask")
+            or self.prefix_source_length < source_length
+            or self.prefix_attention_mask.shape[0] < length
+        ):
+            new_source_length = max(source_length, self.prefix_source_length)
+            new_length = max(length, 3 * self.default_seq_len)
+            self.prefix_attention_mask = self._create_prefix_attention_mask(new_source_length, new_length)
+            self.prefix_source_length = new_source_length
         start = self.prefix_source_length - source_length
         end = start + length
         return self.prefix_attention_mask[start:end, start:end]
@@ -386,6 +389,7 @@ class MelodyCompletionModel(MelodyModel):
         top_k: int = 0,
         top_p: float = 1.0,
         max_length: int = 512,
+        times_to_predict: int = 1,
         use_positional_encoding: bool = False,
         **kwargs,
     ) -> None:
@@ -406,10 +410,12 @@ class MelodyCompletionModel(MelodyModel):
         self.top_k = top_k
         self.top_p = top_p
         self.max_length = max_length
+        self.times_to_predict = times_to_predict
+
         self.attention_mask = torch.triu(torch.ones((max_length, max_length), dtype=torch.bool), diagonal=1)
         self.bos_token_tensor = torch.tensor(self.tokenizer.bos_token_ids, dtype=torch.long)
         self.eos_token_tensor = torch.tensor(self.tokenizer.eos_token_ids, dtype=torch.long)
-        
+
         self.bar_field_index = self.tokenizer.field_indices["bar"]
         self.bar_vocab_size = self.tokenizer.vocab_sizes[self.bar_field_index]
 
@@ -421,52 +427,41 @@ class MelodyCompletionModel(MelodyModel):
         return self.fuser.decode(x)
 
     def predict_step(self, batch: DataBatch, batch_idx: int, dataloader_idx: int = 0) -> torch.Tensor:
-        input_ids = batch.input_ids
-        batch_size, _, _ = input_ids.shape
-        assert batch_size == 1, "Only support batch size of 1 for prediction for now"
         if self.attention_mask.device != self.device:
             self.attention_mask = self.attention_mask.to(self.device)
             self.bos_token_tensor = self.bos_token_tensor.to(self.device)
             self.eos_token_tensor = self.eos_token_tensor.to(self.device)
 
-        if self.conditional_bar_length > 0:
-            # Crop the input to the conditional bar length
-            raise NotImplementedError
-        else:
-            input_ids = self.bos_token_tensor.view(1, 1, -1)
-
-        # Inference on a single sequence
-        # tokens = []
+        input_ids = self.bos_token_tensor.expand(self.times_to_predict, 1, -1)
+        reached_eos = np.zeros(self.times_to_predict, dtype=np.bool_)
         while input_ids.shape[1] < self.max_length:
             seq_len = input_ids.shape[1]
-            attention_mask = self.attention_mask[:seq_len, :seq_len]
+            attn_mask = self.attention_mask[:seq_len, :seq_len]
+            logits = self(input_ids, attn_mask=attn_mask)
 
-            logits = self(input_ids, attention_mask)
             sampled_tokens = []
             for logit in logits:
                 # Decode according to the sampling strategy
                 sampled_token = top_k_top_p_sample(
                     logit[:, -1, :], top_k=self.top_k, top_p=self.top_p, temperature=self.temperature
-                )[0]
+                )
                 sampled_tokens.append(sampled_token)
+            # (batch_size, num_features)
             sampled_tokens = torch.cat(sampled_tokens, dim=-1)
 
-            # token = self.tokenizer.convert_id_to_token(sampled_tokens.cpu().numpy())
-            # tokens.append(token)
-            # print(token)
-
-            # until <EOS> token is generated
-            if torch.all(sampled_tokens == self.eos_token_tensor):
+            # until <EOS> token is generated or the predicted bar length is reached
+            for batch_index in range(self.times_to_predict):
+                token = sampled_tokens[batch_index]
+                if (
+                    torch.all(token == self.eos_token_tensor)
+                    or self.prediction_bar_length <= token[self.bar_field_index] < self.bar_vocab_size
+                ):
+                    reached_eos[batch_index] = True
+            if np.all(reached_eos):
                 break
-            # or until the predicted bar length is reached
-            if self.prediction_bar_length <= sampled_tokens[self.bar_field_index] < self.bar_vocab_size:
-                break
-            # bar_length = self.tokenizer.get_tokens_bar_length(tokens)
-            # if bar_length >= self.prediction_bar_length:
-            #     break
 
             # Append the sampled token to the input
-            input_ids = torch.cat([input_ids, sampled_tokens.unsqueeze(0).unsqueeze(0)], dim=1)
+            input_ids = torch.cat([input_ids, sampled_tokens[:, None, :]], dim=1)
 
         return input_ids
 
@@ -511,7 +506,7 @@ class MelodyInfillingModel(MelodyModel):
 
         self.sep_token_tensor = torch.tensor(self.tokenizer.sep_token_ids, dtype=torch.long)
         self.long_mask_token_tensor = torch.tensor(self.tokenizer.long_mask_token_ids, dtype=torch.long)
-        
+
         self.bar_field_index = self.tokenizer.field_indices["bar"]
         self.bar_vocab_size = self.tokenizer.vocab_sizes[self.bar_field_index]
 
@@ -568,7 +563,7 @@ class MelodyInfillingModel(MelodyModel):
         input_ids = torch.cat(
             [
                 input_ids[:, :mask_token_position, :],
-                input_ids[:, original_len + 1:, :],
+                input_ids[:, original_len + 1 :, :],
                 input_ids[:, mask_token_position + 1 : original_len + 1, :],
             ],
             dim=1,
@@ -583,10 +578,30 @@ class CustomWriter(BasePredictionWriter):
         super().__init__(write_interval="batch")
         self.output_dir = output_dir
 
+    def decode(
+        self, token_ids: np.ndarray, tokenizer: MIDITokenizer, prediction_bar_length: Optional[int] = None, **kwargs
+    ):
+        # (seq_len, num_features)
+        bar_field_index = tokenizer.field_indices["bar"]
+        bar_vocab_size = tokenizer.vocab_sizes[bar_field_index]
+        # Crop the sequence at the first <EOS> token or where the bar length is reached
+        for index in range(token_ids.shape[0]):
+            token = token_ids[index]
+            if (
+                np.all(token == tokenizer.eos_token_ids)
+                or prediction_bar_length is not None
+                and prediction_bar_length <= token[bar_field_index] < bar_vocab_size
+            ):
+                token_ids = token_ids[:index]
+                break
+        midi = tokenizer.decode(token_ids)
+        midi = tokenizer.filter_overlapping_notes(midi)
+        return midi
+
     def write_on_batch_end(
         self,
         trainer: "pl.Trainer",
-        pl_module: MelodyPretrainModel,
+        pl_module: MelodyCompletionModel,
         prediction: torch.Tensor,
         batch_indices: Optional[Sequence[int]],
         batch: DataBatch,
@@ -595,10 +610,21 @@ class CustomWriter(BasePredictionWriter):
     ) -> None:
         if prediction is None:
             return
-        filename = batch.filenames[0]
-        dest_path = os.path.join(self.output_dir, f"{filename}+{dataloader_idx}.mid")
-        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-        prediction = prediction[0].cpu().numpy()
-        midi = pl_module.tokenizer.decode(prediction)
-        midi = pl_module.tokenizer.filter_overlapping_notes(midi)
-        midi.dump(dest_path)
+        filename = batch.filenames[0] if batch.filenames is not None else str(batch_idx)
+
+        # (batch_size, seq_len, num_features)
+        prediction = prediction.cpu().numpy()
+        for index in range(prediction.shape[0]):
+            if prediction.shape[0] > 1:
+                dest_path = os.path.join(self.output_dir, f"{filename}+{index}.mid")
+            else:
+                dest_path = os.path.join(self.output_dir, f"{filename}+{dataloader_idx}.mid")
+            os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+            midi = self.decode(
+                prediction[index],
+                tokenizer=pl_module.tokenizer,
+                prediction_bar_length=pl_module.prediction_bar_length
+                if hasattr(pl_module, "prediction_bar_length")
+                else None,
+            )
+            midi.dump(dest_path)

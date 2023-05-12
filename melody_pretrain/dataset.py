@@ -827,15 +827,10 @@ class DataCollator:
 class DataCollatorForPaddingOnly(DataCollator):
     """Data collator for padding only, useful in inference stage."""
 
-    def __init__(self, seq_len: int, empty: bool = False):
+    def __init__(self, seq_len: int):
         super().__init__(seq_len)
-        # Provide empty dummy data for from scratch generation
-        self.empty = empty
 
     def __call__(self, batch: List[DatasetItem]) -> DataBatch:
-        if self.empty:
-            return DataBatch(input_ids=np.empty((1, 0, 0), dtype=np.int64))
-        
         # TODO: Consider right side padding for batch inference?
         data_list = [item.data for item in batch]
         filenames = [item.filename for item in batch]
@@ -1309,6 +1304,17 @@ class MelodyDataset(Dataset):
         return DatasetItem(data, note_map, extra_data, filename)
 
 
+class EmptyDataset(Dataset):
+    def __init__(self, length: int):
+        self.length = length
+
+    def __len__(self):
+        return self.length
+
+    def __getitem__(self, index):
+        return None
+
+
 class MelodyPretrainDataModule(pl.LightningDataModule):
     def __init__(
         self,
@@ -1318,6 +1324,8 @@ class MelodyPretrainDataModule(pl.LightningDataModule):
         load_bar_data: bool = False,
         load_ngram_data: bool = False,
         pitch_augumentation: bool = True,
+        empty: bool = False,
+        length: Optional[int] = None,
         times_to_predict: int = 1,
         debug: bool = False,
     ):
@@ -1333,6 +1341,10 @@ class MelodyPretrainDataModule(pl.LightningDataModule):
         self.load_bar_data = load_bar_data
         self.load_ngram_data = load_ngram_data
         self.pitch_augumentation = pitch_augumentation
+
+        # Make dummy data loader for generation from scratch
+        self.empty = empty
+        self.length = length
         self.times_to_predict = times_to_predict
         self.debug = debug
 
@@ -1359,6 +1371,12 @@ class MelodyPretrainDataModule(pl.LightningDataModule):
             num_workers=self.num_workers if not self.debug else 0,
             pin_memory=True and not self.debug,
         )
+
+    def _make_empty_dataloader(self, length: int):
+        def dummy_collator(batch: list) -> DataBatch:
+            return DataBatch(None)
+
+        return DataLoader(EmptyDataset(length), collate_fn=dummy_collator)
 
     def _make_data_loaders(self, split_name: str):
         if split_name not in self.datasets:
@@ -1399,6 +1417,8 @@ class MelodyPretrainDataModule(pl.LightningDataModule):
         return self._make_data_loaders("test")
 
     def predict_dataloader(self):
+        if self.empty:
+            return self._make_empty_dataloader(self.length)
         if self.times_to_predict > 1:
             return [self._make_data_loaders("predict") for _ in range(self.times_to_predict)]
         return self._make_data_loaders("predict")

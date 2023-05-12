@@ -16,6 +16,8 @@ class CustomLightningCLI(LightningCLI):
     def setup_tasks(self) -> None:
         config = self.parser.instantiate_classes(self.config)
         tasks = getattr(config, self.subcommand).task
+        if tasks is None:
+            return
         if not isinstance(tasks, list):
             tasks = [tasks]
         task_names = [task.task_name for task in tasks]
