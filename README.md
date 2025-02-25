@@ -1,4 +1,41 @@
-# Melody Pretrain
+# MelodyGLM: Multi-task Pre-training for Symbolic Melody Generation
+
+[Paper](https://arxiv.org/abs/2309.10738)  
+[Presentation Slides](asset/MelodyGLM.pdf)
+
+## Abstract
+Pre-trained language models have achieved impressive results in various music understanding and generation tasks. However, existing pre-training methods for symbolic melody generation struggle to capture multi-scale, multi-dimensional structural information in note sequences, due to the domain knowledge discrepancy between text and music. Moreover, the lack of available large-scale symbolic melody datasets limits the pre-training improvement.
+
+In this paper, we propose MelodyGLM, a multi-task pre-training framework for generating melodies with long-term structure. We design the melodic n-gram and long span sampling strategies to create local and global blank infilling tasks for modeling the local and global structures in melodies.
+
+Specifically, we incorporate pitch n-grams, rhythm n-grams, and their combined n-grams into the melodic n-gram blank infilling tasks for modeling the multi-dimensional structures in melodies. To this end, we have constructed a large-scale symbolic melody dataset, MelodyNet, containing more than 0.4 million melody pieces. MelodyNet is utilized for large-scale pre-training and domain-specific n-gram lexicon construction.
+
+Both subjective and objective evaluations demonstrate that MelodyGLM surpasses the standard and previous pre-training methods. In particular, subjective evaluations show that, on the melody continuation task, MelodyGLM gains average improvements of 0.82, 0.87, 0.78, and 0.94 in consistency, rhythmicity, structure, and overall quality, respectively. Notably, MelodyGLM nearly matches the quality of human-composed melodies on the melody inpainting task.
+
+## Demo
+Melody completion on *Ode to Joy* (a little bit swing):
+![Melody completion Ode to Joy](asset/ode_completion.mp4)
+
+Melody inpainting on *Jasmine* for the 4 bars in the middle:
+![Melody inpainting on Jasmine](asset/jasmine_inpainting.mp4)
+
+## Structure
+- `main.py`: Starting point for training, testing and inference, defining Lightning CLI.
+- `lexicon.py`: Script to extract N-grams, build lexicon and annotate the MIDI files.
+- `prepare_data.py`: Script to compile NumPy formatted dataset from MIDI files and their extracted N-grams.
+- `compute_metric.py`: Script to compute metrics from generated pieces and ground truth pieces.
+- `melody_pretrain`
+  - `dataset.py`: Datasets and dataloaders with various custom data collators to implement different input/target format and masking methods for ablation experiments.
+  - `model.py`: The core model, with several subclasses for different purposes, such as pre-training, testing, completion and infilling.
+  - `module.py`: Custom modules such as compound token fuser and positional encoding.
+  - `ngram.py`: N-gram-related codes to extract N-grams, calculate frequency, score, ranking, build the lexicon and annotate the MIDI files.
+  - `task.py`: Use the task abstraction to setup both input/target format and masking method combination for given experiment config.
+  - `tokenizer.py`: Different flavors of MIDI file tokenizers, including `MIDITokenizer` [(Huang et al., 2019)](https://research.google/pubs/music-transformer-generating-music-with-long-term-structure/), `RemiTokenizer` [(Huang and Yang, 2020)](https://arxiv.org/abs/2002.00212), `CPTokenizer` [(Hsiao et al., 2021)](https://arxiv.org/abs/2101.02402), and `OctupleTokenizer` [(Zeng et al., 2021)](https://arxiv.org/abs/2106.05630).
+- `metric`: Codes related to evaluation.
+- `config`: All model config files for different experiment groups.
+- `script`: Scripts for pre-training, fine-tuning and generation for experiments.
+- `production`: Contains script to convert Lightning checkpoint to deployable PyTorch checkpoint, the model codes and example codes for inference.
+- And other codes for drawing figures, statistics, etc.
 
 ## Commands
 
