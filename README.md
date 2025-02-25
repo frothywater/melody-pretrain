@@ -14,10 +14,12 @@ Both subjective and objective evaluations demonstrate that MelodyGLM surpasses t
 
 ## Demo
 Melody completion on *Ode to Joy* (a little bit swing):
-![Melody completion Ode to Joy](asset/ode_completion.mp4)
+
+https://github.com/user-attachments/assets/48bca977-e17c-4376-9c33-1fa279d65dc2
 
 Melody inpainting on *Jasmine* for the 4 bars in the middle:
-![Melody inpainting on Jasmine](asset/jasmine_inpainting.mp4)
+
+https://github.com/user-attachments/assets/c46bbfb6-c2d7-4080-9c6c-bde439eebe34
 
 ## Structure
 - `main.py`: Starting point for training, testing and inference, defining Lightning CLI.
